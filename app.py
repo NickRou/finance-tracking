@@ -100,7 +100,7 @@ def _file_rows_for_table(
         return []
     return [
         {
-            "file_id": row["file_id"],
+            "id": row["file_id"],
             "filename": row["filename"],
             "institution": row["institution"],
         }
@@ -141,7 +141,6 @@ app.layout = html.Div(
         dash_table.DataTable(
             id="file-tag-table",
             columns=[
-                {"name": "File ID", "id": "file_id", "editable": False},
                 {"name": "File", "id": "filename", "editable": False},
                 {
                     "name": "Institution",
@@ -151,6 +150,8 @@ app.layout = html.Div(
             ],
             data=[],
             editable=True,
+            row_selectable="multi",
+            selected_rows=[],
             dropdown={
                 "institution": {
                     "options": [
@@ -158,9 +159,22 @@ app.layout = html.Div(
                     ]
                 }
             },
-            hidden_columns=["file_id"],
-            style_table={"marginBottom": "12px", "overflowX": "auto"},
-            style_cell={"textAlign": "left", "padding": "8px"},
+            style_table={
+                "marginBottom": "12px",
+                "overflowX": "auto",
+                "overflowY": "auto",
+                "maxHeight": "300px",
+            },
+            style_cell={
+                "textAlign": "left",
+                "padding": "8px",
+            },
+        ),
+        html.Button(
+            "Remove Selected Files",
+            id="remove-selected-files",
+            n_clicks=0,
+            disabled=True,
         ),
         html.Button("Import Tagged Files", id="import-files", n_clicks=0),
         html.Div(id="upload-message", style={"marginTop": "10px"}),
@@ -249,14 +263,67 @@ def handle_uploads(
 
 
 @callback(
+    Output("remove-selected-files", "disabled"),
+    Input("uploaded-files-store", "data"),
+    Input("file-tag-table", "selected_rows"),
+)
+def toggle_remove_selected_button(
+    uploaded_files: list[dict[str, str]] | None,
+    selected_rows: list[int] | None,
+) -> bool:
+    if not uploaded_files:
+        return True
+    return not bool(selected_rows)
+
+
+@callback(
+    Output("uploaded-files-store", "data", allow_duplicate=True),
+    Output("file-tag-table", "data", allow_duplicate=True),
+    Output("file-tag-table", "selected_rows"),
+    Output("upload-message", "children", allow_duplicate=True),
+    Input("remove-selected-files", "n_clicks"),
+    State("uploaded-files-store", "data"),
+    State("file-tag-table", "selected_rows"),
+    prevent_initial_call=True,
+)
+def remove_selected_files(
+    n_clicks: int,
+    uploaded_files: list[dict[str, str]] | None,
+    selected_rows: list[int] | None,
+) -> tuple[
+    list[dict[str, str]] | object, list[dict[str, str]] | object, list[int], str
+]:
+    if not n_clicks:
+        return no_update, no_update, [], ""
+
+    current = list(uploaded_files or [])
+    if not current:
+        return no_update, no_update, [], "No files to remove."
+
+    selected = set(selected_rows or [])
+    if not selected:
+        return no_update, no_update, [], "Select file rows to remove."
+
+    kept = [row for idx, row in enumerate(current) if idx not in selected]
+    removed_count = len(current) - len(kept)
+    return (
+        kept,
+        _file_rows_for_table(kept),
+        [],
+        f"Removed {removed_count} file(s) from the import queue.",
+    )
+
+
+@callback(
     Output("import-message", "children"),
     Output("refresh-token", "data"),
-    Output("uploaded-files-store", "data"),
-    Output("file-tag-table", "data"),
+    Output("uploaded-files-store", "data", allow_duplicate=True),
+    Output("file-tag-table", "data", allow_duplicate=True),
     Input("import-files", "n_clicks"),
     State("uploaded-files-store", "data"),
     State("file-tag-table", "data"),
     State("refresh-token", "data"),
+    prevent_initial_call=True,
 )
 def import_uploaded_files(
     n_clicks: int,
@@ -275,7 +342,7 @@ def import_uploaded_files(
         )
 
     institution_by_id = {
-        str(row.get("file_id", "")): str(row.get("institution", ""))
+        str(row.get("id", "")): str(row.get("institution", ""))
         for row in (table_data or [])
     }
 

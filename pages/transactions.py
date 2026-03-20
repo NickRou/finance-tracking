@@ -20,6 +20,7 @@ from dash import (
 
 from db import get_connection, list_transaction_accounts, upsert_statement_anchor
 from parsers.pipeline import ImportSummary, import_csv
+from ui_labels import format_account_type, format_institution
 
 
 register_page(__name__, path="/transactions", title="Transactions")
@@ -52,7 +53,10 @@ def _account_dropdown_options() -> list[dict[str, str | int]]:
     for account in list_transaction_accounts():
         options.append(
             {
-                "label": f"{account['name']} ({account['institution']})",
+                "label": (
+                    f"{account['name']} "
+                    f"({format_institution(str(account['institution']))})"
+                ),
                 "value": int(account["id"]),
             }
         )
@@ -105,8 +109,8 @@ def _fetch_overview() -> tuple[dict[str, str], list[dict[str, str]]]:
         {
             "account_id": int(row[0]),
             "account": str(row[1]),
-            "institution": str(row[2]),
-            "account_type": str(row[3]),
+            "institution": format_institution(str(row[2])),
+            "account_type": format_account_type(str(row[3])),
             "transaction_count": int(row[4]),
             "net": _format_money(int(row[5])),
             "debits": _format_money(int(row[6])),
@@ -155,7 +159,7 @@ def _fetch_transactions(account_filter: str) -> list[dict[str, str]]:
         {
             "occurred_on": str(row[0]),
             "posted_on": str(row[1] or "-"),
-            "institution": str(row[2]),
+            "institution": format_institution(str(row[2])),
             "description": str(row[3]),
             "category": str(row[4] or ""),
             "amount": _format_money(int(row[5])),
@@ -237,13 +241,25 @@ def layout() -> html.Div:
                 },
                 style_cell={"textAlign": "left", "padding": "8px"},
             ),
-            html.Button(
-                "Remove Selected Files",
-                id="tx-remove-selected-files",
-                n_clicks=0,
-                disabled=True,
+            html.Div(
+                [
+                    html.Button(
+                        "+ Import Tagged Files", id="tx-import-files", n_clicks=0
+                    ),
+                    html.Button(
+                        "- Remove Selected Files",
+                        id="tx-remove-selected-files",
+                        n_clicks=0,
+                        disabled=True,
+                    ),
+                ],
+                style={
+                    "display": "flex",
+                    "gap": "10px",
+                    "alignItems": "center",
+                    "marginBottom": "2px",
+                },
             ),
-            html.Button("Import Tagged Files", id="tx-import-files", n_clicks=0),
             html.Div(id="tx-upload-message", style={"marginTop": "10px"}),
             html.Div(
                 id="tx-import-message",
@@ -269,7 +285,12 @@ def layout() -> html.Div:
                     dcc.DatePickerSingle(
                         id="tx-anchor-date", placeholder="Statement date"
                     ),
-                    html.Button("Save Anchor", id="tx-save-anchor", n_clicks=0),
+                    html.Button(
+                        "Save Anchor",
+                        id="tx-save-anchor",
+                        n_clicks=0,
+                        style={"height": "38px", "padding": "0 12px"},
+                    ),
                 ],
                 style={
                     "display": "flex",
@@ -280,10 +301,6 @@ def layout() -> html.Div:
             ),
             html.Div(id="tx-anchor-message", style={"marginBottom": "16px"}),
             html.H3("Overview"),
-            html.Div(
-                id="tx-kpi-cards",
-                style={"display": "flex", "gap": "12px", "flexWrap": "wrap"},
-            ),
             html.H4("By Account"),
             dash_table.DataTable(
                 id="tx-overview-table",
@@ -622,28 +639,14 @@ def save_statement_anchor(
 
 
 @callback(
-    Output("tx-kpi-cards", "children"),
     Output("tx-overview-table", "data"),
     Input("tx-refresh-token", "data"),
 )
 def refresh_overview(
     _refresh_token: int,
-) -> tuple[list[html.Div], list[dict[str, str]]]:
-    totals, overview_rows = _fetch_overview()
-    cards = [
-        html.Div(
-            [html.Div("Transactions"), html.Strong(totals["total_transactions"])],
-            style=_card_style(),
-        ),
-        html.Div([html.Div("Net"), html.Strong(totals["net"])], style=_card_style()),
-        html.Div(
-            [html.Div("Debits"), html.Strong(totals["debits"])], style=_card_style()
-        ),
-        html.Div(
-            [html.Div("Credits"), html.Strong(totals["credits"])], style=_card_style()
-        ),
-    ]
-    return cards, overview_rows
+) -> list[dict[str, str]]:
+    _totals, overview_rows = _fetch_overview()
+    return overview_rows
 
 
 @callback(

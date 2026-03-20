@@ -23,6 +23,7 @@ from db import (
     list_investment_accounts,
     list_investment_holdings,
 )
+from ui_labels import format_asset_type, format_institution
 
 
 register_page(__name__, path="/investments", title="Investments")
@@ -54,7 +55,10 @@ def _investment_account_options() -> list[dict[str, str | int]]:
     for account in list_investment_accounts():
         options.append(
             {
-                "label": f"{account['name']} ({account['institution']})",
+                "label": (
+                    f"{account['name']} "
+                    f"({format_institution(str(account['institution']))})"
+                ),
                 "value": int(account["id"]),
             }
         )
@@ -62,7 +66,9 @@ def _investment_account_options() -> list[dict[str, str | int]]:
 
 
 def _asset_type_options() -> list[dict[str, str]]:
-    return [{"label": value, "value": value} for value in ASSET_TYPES]
+    return [
+        {"label": format_asset_type(value), "value": value} for value in ASSET_TYPES
+    ]
 
 
 def _fetch_symbol_prices(symbols: list[str]) -> tuple[dict[str, float], dict[str, str]]:
@@ -207,8 +213,8 @@ def _build_dashboard_data() -> tuple[
             {
                 "id": holding_id,
                 "account": account_name,
-                "institution": institution,
-                "asset_type": asset_type,
+                "institution": format_institution(institution),
+                "asset_type": format_asset_type(asset_type),
                 "symbol": symbol or "-",
                 "name": name,
                 "quantity": qty_display,
@@ -230,7 +236,7 @@ def _build_dashboard_data() -> tuple[
         account_rows.append(
             {
                 "account": row["account"],
-                "institution": row["institution"],
+                "institution": format_institution(str(row["institution"])),
                 "holdings_count": row["holdings_count"],
                 "market_value": _format_money(row["market_value"]),
                 "cost_basis": _format_money(row["cost_basis"]),

@@ -16,7 +16,17 @@ app.layout = html.Div(
     [
         html.Div(
             [
-                html.H1("Local Finance Tracking", className="app-title"),
+                html.Div(
+                    [
+                        html.Img(
+                            src="/assets/gifs/coffee-gif.gif",
+                            alt="Coffee",
+                            className="title-gif",
+                        ),
+                        html.H1("Local Finance Tracking", className="app-title"),
+                    ],
+                    className="title-wrap",
+                ),
                 html.Div(
                     [
                         dcc.Link(

@@ -89,6 +89,7 @@ def _fetch_overview() -> tuple[dict[str, str], list[dict[str, str]]]:
             FROM accounts a
             LEFT JOIN transactions t ON t.account_id = a.id
             LEFT JOIN statement_anchors s ON s.account_id = a.id
+            WHERE a.account_type IN ('credit_card', 'savings_account')
             GROUP BY a.id, a.name, a.institution, a.account_type, s.anchor_date, s.anchor_balance_cents
             ORDER BY a.institution ASC, a.name ASC
             """
@@ -131,18 +132,21 @@ def _fetch_transactions(account_filter: str) -> list[dict[str, str]]:
         if account_filter == "all":
             rows = conn.execute(
                 """
-                SELECT occurred_on, posted_on, institution, description, category_raw, amount_cents
-                FROM transactions
-                ORDER BY occurred_on DESC, id DESC
+                SELECT t.occurred_on, t.posted_on, t.institution, t.description, t.category_raw, t.amount_cents
+                FROM transactions t
+                INNER JOIN accounts a ON a.id = t.account_id
+                WHERE a.account_type IN ('credit_card', 'savings_account')
+                ORDER BY t.occurred_on DESC, t.id DESC
                 """
             ).fetchall()
         else:
             rows = conn.execute(
                 """
-                SELECT occurred_on, posted_on, institution, description, category_raw, amount_cents
-                FROM transactions
-                WHERE account_id = ?
-                ORDER BY occurred_on DESC, id DESC
+                SELECT t.occurred_on, t.posted_on, t.institution, t.description, t.category_raw, t.amount_cents
+                FROM transactions t
+                INNER JOIN accounts a ON a.id = t.account_id
+                WHERE t.account_id = ? AND a.account_type IN ('credit_card', 'savings_account')
+                ORDER BY t.occurred_on DESC, t.id DESC
                 """,
                 (int(account_filter),),
             ).fetchall()
@@ -207,15 +211,10 @@ def layout() -> html.Div:
             html.H3("Import Files"),
             dcc.Upload(
                 id="tx-upload-files",
-                children=html.Div(
-                    ["Drag and drop CSV files or ", html.Button("Select Files")]
-                ),
+                children=html.Button("Select Files"),
                 multiple=True,
                 style={
-                    "width": "100%",
-                    "padding": "16px",
-                    "border": "1px dashed #7a7a7a",
-                    "borderRadius": "10px",
+                    "display": "inline-block",
                     "marginBottom": "12px",
                 },
             ),

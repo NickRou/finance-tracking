@@ -10,13 +10,13 @@ load_dotenv(dotenv_path=".env")
 initialize_database()
 
 app = Dash(__name__, use_pages=True, suppress_callback_exceptions=True)
-app.title = "Finance Tracking"
+app.title = "Local Finance Tracking"
 
 app.layout = html.Div(
     [
         html.Div(
             [
-                html.H1("Finance Tracking", className="app-title"),
+                html.H1("Local Finance Tracking", className="app-title"),
                 html.Div(
                     [
                         dcc.Link(

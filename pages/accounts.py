@@ -182,6 +182,7 @@ def remove_selected_accounts(
     tx_count = 0
     batch_count = 0
     anchor_count = 0
+    holdings_count = 0
     deleted_accounts = 0
 
     with get_connection() as conn:
@@ -204,6 +205,12 @@ def remove_selected_accounts(
                     (account_id,),
                 ).fetchone()[0]
             )
+            holdings_count += int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM investment_holdings WHERE account_id = ?",
+                    (account_id,),
+                ).fetchone()[0]
+            )
 
             conn.execute("DELETE FROM transactions WHERE account_id = ?", (account_id,))
             conn.execute(
@@ -212,11 +219,15 @@ def remove_selected_accounts(
             conn.execute(
                 "DELETE FROM statement_anchors WHERE account_id = ?", (account_id,)
             )
+            conn.execute(
+                "DELETE FROM investment_holdings WHERE account_id = ?", (account_id,)
+            )
             result = conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
             deleted_accounts += int(result.rowcount > 0)
 
     message = (
         f"Removed {deleted_accounts} account(s), {tx_count} transaction(s), "
-        f"{batch_count} import batch(es), and {anchor_count} anchor(s)."
+        f"{batch_count} import batch(es), {anchor_count} anchor(s), "
+        f"and {holdings_count} holding(s)."
     )
     return message, _accounts_rows(), []

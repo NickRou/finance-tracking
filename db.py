@@ -41,7 +41,7 @@ def initialize_database() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 institution TEXT NOT NULL,
-                account_type TEXT NOT NULL CHECK (account_type IN ('credit_card', 'savings_account')),
+                account_type TEXT NOT NULL CHECK (account_type IN ('credit_card', 'savings_account', 'investment_account')),
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(name, institution)

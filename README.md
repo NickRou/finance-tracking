@@ -41,6 +41,12 @@ Run the app:
 uv run app.py
 ```
 
+Pages:
+
+- `http://127.0.0.1:8050/transactions`
+- `http://127.0.0.1:8050/accounts`
+- `http://127.0.0.1:8050/investments`
+
 In the dashboard:
 
 1. Create accounts in the `Accounts` section first.

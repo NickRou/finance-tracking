@@ -20,7 +20,7 @@ class DiscoverAdapter:
         posted_on = parse_date_optional(row.get("Post Date", ""))
         description = clean(row.get("Description", ""))
         category_raw = clean_optional(row.get("Category", ""))
-        amount_cents = parse_money(row.get("Amount", ""))
+        amount_cents = -parse_money(row.get("Amount", ""))
 
         external_id = stable_external_id(
             self.institution,

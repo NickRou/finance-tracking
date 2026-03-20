@@ -251,6 +251,8 @@ def handle_uploads(
 @callback(
     Output("import-message", "children"),
     Output("refresh-token", "data"),
+    Output("uploaded-files-store", "data"),
+    Output("file-tag-table", "data"),
     Input("import-files", "n_clicks"),
     State("uploaded-files-store", "data"),
     State("file-tag-table", "data"),
@@ -261,11 +263,16 @@ def import_uploaded_files(
     uploaded_files: list[dict[str, str]] | None,
     table_data: list[dict[str, str]] | None,
     refresh_token: int,
-) -> tuple[str, int]:
+) -> tuple[str, int, list[dict[str, str]] | object, list[dict[str, str]] | object]:
     if not n_clicks:
-        return "", refresh_token
+        return "", refresh_token, no_update, no_update
     if not uploaded_files:
-        return "No files to import. Upload CSV files first.", refresh_token
+        return (
+            "No files to import. Upload CSV files first.",
+            refresh_token,
+            no_update,
+            no_update,
+        )
 
     institution_by_id = {
         str(row.get("file_id", "")): str(row.get("institution", ""))
@@ -275,6 +282,7 @@ def import_uploaded_files(
     total = ImportSummary(parsed=0, inserted=0, duplicates=0, invalid=0)
     skipped: list[str] = []
     failed: list[str] = []
+    remaining_rows: list[dict[str, str]] = []
 
     for row in uploaded_files:
         file_id = str(row.get("file_id", ""))
@@ -284,9 +292,11 @@ def import_uploaded_files(
         temp_path: Path | None = None
         if not filename.lower().endswith(".csv"):
             skipped.append(filename)
+            remaining_rows.append({**row, "institution": institution})
             continue
         if institution not in INSTITUTIONS:
             failed.append(f"{filename}: invalid institution tag")
+            remaining_rows.append({**row, "institution": institution})
             continue
 
         try:
@@ -296,7 +306,11 @@ def import_uploaded_files(
                 handle.write(decoded)
                 temp_path = Path(handle.name)
 
-            result = import_csv(institution=institution, file_path=str(temp_path))
+            result = import_csv(
+                institution=institution,
+                file_path=str(temp_path),
+                source_filename=filename,
+            )
             total = ImportSummary(
                 parsed=total.parsed + result.parsed,
                 inserted=total.inserted + result.inserted,
@@ -305,6 +319,7 @@ def import_uploaded_files(
             )
         except Exception as exc:
             failed.append(f"{filename}: {exc}")
+            remaining_rows.append({**row, "institution": institution})
         finally:
             if temp_path and temp_path.exists():
                 temp_path.unlink()
@@ -318,7 +333,12 @@ def import_uploaded_files(
     if failed:
         message += f" Failed: {'; '.join(failed)}."
 
-    return message, refresh_token + 1
+    return (
+        message,
+        refresh_token + 1,
+        remaining_rows,
+        _file_rows_for_table(remaining_rows),
+    )
 
 
 @callback(

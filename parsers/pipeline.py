@@ -18,9 +18,11 @@ class ImportSummary:
     invalid: int
 
 
-def import_csv(*, institution: str, file_path: str) -> ImportSummary:
+def import_csv(
+    *, institution: str, file_path: str, source_filename: str | None = None
+) -> ImportSummary:
     adapter = get_adapter(institution)
-    source_file = str(Path(file_path).name)
+    source_file = source_filename or str(Path(file_path).name)
 
     parsed = 0
     inserted = 0

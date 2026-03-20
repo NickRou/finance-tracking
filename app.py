@@ -14,18 +14,27 @@ app.title = "Finance Tracking"
 
 app.layout = html.Div(
     [
-        html.H1("Finance Tracking Dashboard"),
         html.Div(
             [
-                dcc.Link("Transactions", href="/transactions"),
-                dcc.Link("Accounts", href="/accounts"),
-                dcc.Link("Investments", href="/investments"),
+                html.H1("Finance Tracking", className="app-title"),
+                html.Div(
+                    [
+                        dcc.Link(
+                            "Transactions", href="/transactions", className="nav-link"
+                        ),
+                        dcc.Link("Accounts", href="/accounts", className="nav-link"),
+                        dcc.Link(
+                            "Investments", href="/investments", className="nav-link"
+                        ),
+                    ],
+                    className="nav-links",
+                ),
             ],
-            style={"display": "flex", "gap": "14px", "marginBottom": "16px"},
+            className="top-nav",
         ),
-        page_container,
+        html.Div(page_container, className="page-container"),
     ],
-    style={"maxWidth": "1200px", "margin": "0 auto", "padding": "16px"},
+    className="app-shell",
 )
 
 

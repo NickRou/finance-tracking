@@ -330,7 +330,8 @@ def layout() -> html.Div:
             ),
             dcc.Store(id="tx-uploaded-files-store", data=[]),
             dcc.Store(id="tx-refresh-token", data=0),
-        ]
+        ],
+        className="page page-transactions",
     )
 
 

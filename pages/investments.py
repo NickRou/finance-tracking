@@ -409,7 +409,8 @@ def layout() -> html.Div:
             ),
             dcc.Graph(id="inv-portfolio-chart", figure=go.Figure()),
             dcc.Store(id="inv-refresh-token", data=0),
-        ]
+        ],
+        className="page page-investments",
     )
 
 

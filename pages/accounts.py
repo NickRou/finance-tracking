@@ -84,7 +84,8 @@ def layout() -> html.Div:
                 style={"fontSize": "12px", "color": "#666", "marginTop": "6px"},
             ),
             html.Div(id="accounts-delete-message", style={"marginTop": "6px"}),
-        ]
+        ],
+        className="page page-accounts",
     )
 
 

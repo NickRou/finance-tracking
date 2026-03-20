@@ -18,7 +18,7 @@ from dash import (
     register_page,
 )
 
-from db import get_connection, list_accounts, upsert_statement_anchor
+from db import get_connection, list_transaction_accounts, upsert_statement_anchor
 from parsers.pipeline import ImportSummary, import_csv
 
 
@@ -44,12 +44,12 @@ def _parse_dollars_to_cents(value: str | int | float | None) -> int:
 
 
 def _accounts_by_id() -> dict[int, dict[str, str | int]]:
-    return {int(account["id"]): account for account in list_accounts()}
+    return {int(account["id"]): account for account in list_transaction_accounts()}
 
 
 def _account_dropdown_options() -> list[dict[str, str | int]]:
     options: list[dict[str, str | int]] = []
-    for account in list_accounts():
+    for account in list_transaction_accounts():
         options.append(
             {
                 "label": f"{account['name']} ({account['institution']})",

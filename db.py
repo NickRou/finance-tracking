@@ -105,6 +105,45 @@ def initialize_database() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS investment_holdings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL,
+                asset_type TEXT NOT NULL CHECK (
+                    asset_type IN ('cash', 'stock_etf', 'crypto', 'bond_fund', 'other')
+                ),
+                symbol TEXT,
+                name TEXT NOT NULL,
+                quantity REAL,
+                cost_basis_total_cents INTEGER,
+                cash_balance_cents INTEGER,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                CHECK (
+                    (
+                        asset_type = 'cash'
+                        AND symbol IS NULL
+                        AND quantity IS NULL
+                        AND cost_basis_total_cents IS NULL
+                        AND cash_balance_cents IS NOT NULL
+                    )
+                    OR
+                    (
+                        asset_type != 'cash'
+                        AND symbol IS NOT NULL
+                        AND quantity IS NOT NULL
+                        AND quantity > 0
+                        AND cost_basis_total_cents IS NOT NULL
+                        AND cost_basis_total_cents > 0
+                        AND cash_balance_cents IS NULL
+                    )
+                )
+            )
+            """
+        )
 
 
 def _table_columns(conn: Any, table_name: str) -> set[str]:
@@ -198,3 +237,137 @@ def list_accounts() -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def list_transaction_accounts() -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, institution, account_type
+            FROM accounts
+            WHERE account_type IN ('credit_card', 'savings_account')
+            ORDER BY institution ASC, name ASC
+            """
+        ).fetchall()
+    return [
+        {
+            "id": int(row[0]),
+            "name": str(row[1]),
+            "institution": str(row[2]),
+            "account_type": str(row[3]),
+        }
+        for row in rows
+    ]
+
+
+def list_investment_accounts() -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, institution, account_type
+            FROM accounts
+            WHERE account_type = 'investment_account'
+            ORDER BY institution ASC, name ASC
+            """
+        ).fetchall()
+    return [
+        {
+            "id": int(row[0]),
+            "name": str(row[1]),
+            "institution": str(row[2]),
+            "account_type": str(row[3]),
+        }
+        for row in rows
+    ]
+
+
+def list_investment_holdings() -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                h.id,
+                h.account_id,
+                a.name AS account_name,
+                a.institution,
+                h.asset_type,
+                h.symbol,
+                h.name,
+                h.quantity,
+                h.cost_basis_total_cents,
+                h.cash_balance_cents,
+                h.currency
+            FROM investment_holdings h
+            INNER JOIN accounts a ON a.id = h.account_id
+            ORDER BY a.institution ASC, a.name ASC, h.asset_type ASC, h.name ASC
+            """
+        ).fetchall()
+
+    return [
+        {
+            "id": int(row[0]),
+            "account_id": int(row[1]),
+            "account_name": str(row[2]),
+            "institution": str(row[3]),
+            "asset_type": str(row[4]),
+            "symbol": str(row[5]) if row[5] is not None else None,
+            "name": str(row[6]),
+            "quantity": float(row[7]) if row[7] is not None else None,
+            "cost_basis_total_cents": int(row[8]) if row[8] is not None else None,
+            "cash_balance_cents": int(row[9]) if row[9] is not None else None,
+            "currency": str(row[10]),
+        }
+        for row in rows
+    ]
+
+
+def create_investment_holding(
+    *,
+    account_id: int,
+    asset_type: str,
+    symbol: str | None,
+    name: str,
+    quantity: float | None,
+    cost_basis_total_cents: int | None,
+    cash_balance_cents: int | None,
+    currency: str = "USD",
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO investment_holdings (
+                account_id,
+                asset_type,
+                symbol,
+                name,
+                quantity,
+                cost_basis_total_cents,
+                cash_balance_cents,
+                currency
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                account_id,
+                asset_type,
+                symbol,
+                name,
+                quantity,
+                cost_basis_total_cents,
+                cash_balance_cents,
+                currency,
+            ),
+        )
+
+
+def delete_investment_holdings(holding_ids: list[int]) -> int:
+    if not holding_ids:
+        return 0
+
+    placeholders = ",".join(["?"] * len(holding_ids))
+    with get_connection() as conn:
+        before = conn.total_changes
+        conn.execute(
+            f"DELETE FROM investment_holdings WHERE id IN ({placeholders})",
+            tuple(holding_ids),
+        )
+        return conn.total_changes - before

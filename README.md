@@ -47,6 +47,20 @@ Pages:
 - `http://127.0.0.1:8050/accounts`
 - `http://127.0.0.1:8050/investments`
 
+## Investments dashboard
+
+Use the Investments page to track current holdings for `investment_account` accounts.
+
+- Supported asset types: `cash`, `stock_etf`, `crypto`, `bond_fund`, `other`
+- For non-cash holdings, `cost basis total` is required.
+- For cash holdings, use `cash balance` and leave symbol/quantity empty.
+- Security pricing uses `yfinance`, and the Investments page includes an allocation chart by account.
+
+Examples:
+
+- Stocks/ETFs: `AAPL`, `VTI`, `BND`
+- Crypto (Yahoo format): `BTC-USD`, `ETH-USD`
+
 In the dashboard:
 
 1. Create accounts in the `Accounts` section first.

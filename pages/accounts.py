@@ -10,7 +10,9 @@ from parsers.registry import list_institutions
 
 register_page(__name__, path="/accounts", title="Accounts")
 
-INSTITUTIONS = list_institutions()
+INSTITUTIONS = sorted(
+    set(list_institutions() + ["fidelity", "charles_schwab", "coinbase"])
+)
 ACCOUNT_TYPES = ["credit_card", "savings_account", "investment_account"]
 
 

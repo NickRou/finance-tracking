@@ -8,4 +8,5 @@ dependencies = [
     "dash>=4.0.0",
     "python-dotenv>=1.2.2",
     "sqlcipher3>=0.6.2",
+    "yfinance>=1.2.0",
 ]

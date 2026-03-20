@@ -17,6 +17,10 @@ _ADAPTERS: dict[str, InstitutionAdapter] = {
 }
 
 
+def list_institutions() -> list[str]:
+    return sorted(_ADAPTERS)
+
+
 def get_adapter(institution: str) -> InstitutionAdapter:
     key = institution.strip().lower()
     adapter = _ADAPTERS.get(key)

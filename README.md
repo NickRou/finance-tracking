@@ -26,3 +26,18 @@ Supported formats:
 - Chase headers: `Transaction Date, Post Date, Description, Category, Type, Amount, Memo`
 - Discover headers: `Trans. Date, Post Date, Description, Amount, Category`
 - American Express: no header row, each row is `date,description,amount` (tab or comma delimited)
+
+## Dash dashboard workflow
+
+Run the app:
+
+```bash
+uv run app.py
+```
+
+In the dashboard:
+
+1. Upload one or more files (CSV only).
+2. Tag each file with its institution in the file table.
+3. Click `Import Tagged Files`.
+4. Review the institution overview and recent transactions tables.

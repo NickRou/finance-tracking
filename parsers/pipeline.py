@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -16,23 +17,52 @@ class ImportSummary:
     inserted: int
     duplicates: int
     invalid: int
+    skipped_existing_file: bool = False
 
 
 def import_csv(
-    *, institution: str, file_path: str, source_filename: str | None = None
+    *,
+    institution: str,
+    account_id: int,
+    file_path: str,
+    source_filename: str | None = None,
 ) -> ImportSummary:
     adapter = get_adapter(institution)
-    source_file = source_filename or str(Path(file_path).name)
+    path = Path(file_path)
+    source_file = source_filename or str(path.name)
+    file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
 
     parsed = 0
     inserted = 0
     invalid = 0
 
-    with Path(file_path).open("r", encoding="utf-8-sig", newline="") as handle:
-        dialect = _detect_dialect(handle)
-        rows = _iter_rows(adapter=adapter, handle=handle, dialect=dialect)
-        with get_connection() as conn:
-            for row in rows:
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT id FROM import_batches WHERE account_id = ? AND institution = ? AND file_hash = ?",
+            (account_id, institution, file_hash),
+        ).fetchone()
+        if existing is not None:
+            return ImportSummary(
+                parsed=0,
+                inserted=0,
+                duplicates=0,
+                invalid=0,
+                skipped_existing_file=True,
+            )
+
+        conn.execute(
+            """
+            INSERT INTO import_batches (account_id, institution, source_file, file_hash)
+            VALUES (?, ?, ?, ?)
+            """,
+            (account_id, institution, source_file, file_hash),
+        )
+        import_batch_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            dialect = _detect_dialect(handle)
+            rows = _iter_rows(adapter=adapter, handle=handle, dialect=dialect)
+            for source_row_number, row in enumerate(rows, start=1):
                 parsed += 1
                 try:
                     record = adapter.parse_row(row, source_file)
@@ -40,10 +70,10 @@ def import_csv(
                     invalid += 1
                     continue
 
-                before_changes = conn.total_changes
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO transactions (
+                    INSERT INTO transactions (
+                        account_id,
                         institution,
                         occurred_on,
                         posted_on,
@@ -52,10 +82,13 @@ def import_csv(
                         category,
                         category_raw,
                         external_id,
-                        source_file
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        source_file,
+                        import_batch_id,
+                        source_row_number
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
+                        account_id,
                         record.institution,
                         record.occurred_on,
                         record.posted_on,
@@ -65,13 +98,19 @@ def import_csv(
                         record.category_raw,
                         record.external_id,
                         record.source_file,
+                        import_batch_id,
+                        source_row_number,
                     ),
                 )
-                inserted += int(conn.total_changes > before_changes)
+                inserted += 1
 
     duplicates = parsed - inserted - invalid
     return ImportSummary(
-        parsed=parsed, inserted=inserted, duplicates=duplicates, invalid=invalid
+        parsed=parsed,
+        inserted=inserted,
+        duplicates=duplicates,
+        invalid=invalid,
+        skipped_existing_file=False,
     )
 
 

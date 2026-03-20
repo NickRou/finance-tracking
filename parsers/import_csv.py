@@ -19,12 +19,22 @@ def main() -> None:
     parser.add_argument(
         "--file", required=True, dest="file_path", help="Path to CSV export file"
     )
+    parser.add_argument(
+        "--account-id",
+        required=True,
+        type=int,
+        help="Account ID to attach imported transactions to",
+    )
     args = parser.parse_args()
 
     load_dotenv(dotenv_path=".env")
     initialize_database()
 
-    summary = import_csv(institution=args.institution, file_path=args.file_path)
+    summary = import_csv(
+        institution=args.institution,
+        account_id=args.account_id,
+        file_path=args.file_path,
+    )
     print(f"parsed={summary.parsed}")
     print(f"inserted={summary.inserted}")
     print(f"duplicates={summary.duplicates}")

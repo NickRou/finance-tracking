@@ -231,14 +231,29 @@ app.layout = html.Div(
         dash_table.DataTable(
             id="accounts-table",
             columns=[
-                {"name": "ID", "id": "id"},
                 {"name": "Account", "id": "name"},
                 {"name": "Institution", "id": "institution"},
                 {"name": "Type", "id": "account_type"},
             ],
             data=[],
+            row_selectable="multi",
+            selected_rows=[],
             style_table={"overflowX": "auto", "marginBottom": "18px"},
             style_cell={"textAlign": "left", "padding": "8px"},
+        ),
+        html.Button(
+            "Remove Selected Accounts",
+            id="remove-selected-accounts",
+            n_clicks=0,
+            disabled=True,
+        ),
+        html.Div(
+            "Permanently deletes selected account(s) and associated imported data.",
+            style={"fontSize": "12px", "color": "#666", "marginTop": "6px"},
+        ),
+        html.Div(
+            id="account-delete-message",
+            style={"marginTop": "6px", "marginBottom": "12px"},
         ),
         html.P(
             "Upload CSV files, tag each file by account, and import into your encrypted database."
@@ -455,6 +470,148 @@ def add_account(
     return (
         f"Added account {normalized_name} ({institution}, {account_type}).",
         accounts_refresh_token + 1,
+    )
+
+
+@callback(
+    Output("remove-selected-accounts", "disabled"),
+    Input("accounts-table", "data"),
+    Input("accounts-table", "selected_rows"),
+)
+def toggle_remove_accounts_button(
+    accounts_data: list[dict[str, Any]] | None,
+    selected_rows: list[int] | None,
+) -> bool:
+    if not accounts_data:
+        return True
+    return not bool(selected_rows)
+
+
+@callback(
+    Output("account-delete-message", "children"),
+    Output("accounts-refresh-token", "data", allow_duplicate=True),
+    Output("accounts-table", "selected_rows"),
+    Output("uploaded-files-store", "data", allow_duplicate=True),
+    Output("file-tag-table", "data", allow_duplicate=True),
+    Input("remove-selected-accounts", "n_clicks"),
+    State("accounts-table", "data"),
+    State("accounts-table", "selected_rows"),
+    State("uploaded-files-store", "data"),
+    State("accounts-refresh-token", "data"),
+    prevent_initial_call=True,
+)
+def remove_selected_accounts(
+    n_clicks: int,
+    accounts_data: list[dict[str, Any]] | None,
+    selected_rows: list[int] | None,
+    uploaded_files: list[dict[str, Any]] | None,
+    accounts_refresh_token: int,
+) -> tuple[
+    str, int, list[int], list[dict[str, Any]] | object, list[dict[str, Any]] | object
+]:
+    if not n_clicks:
+        return "", accounts_refresh_token, [], no_update, no_update
+    if not accounts_data:
+        return (
+            "No accounts to remove.",
+            accounts_refresh_token,
+            [],
+            no_update,
+            no_update,
+        )
+    if not selected_rows:
+        return (
+            "Select account rows to remove.",
+            accounts_refresh_token,
+            [],
+            no_update,
+            no_update,
+        )
+
+    selected_ids: list[int] = []
+    for idx in selected_rows:
+        if idx < 0 or idx >= len(accounts_data):
+            continue
+        try:
+            raw_id = accounts_data[idx].get("id")
+            if raw_id is None or str(raw_id) == "":
+                continue
+            selected_ids.append(int(raw_id))
+        except TypeError, ValueError:
+            continue
+
+    if not selected_ids:
+        return (
+            "No valid accounts selected.",
+            accounts_refresh_token,
+            [],
+            no_update,
+            no_update,
+        )
+
+    tx_count = 0
+    batch_count = 0
+    anchor_count = 0
+    deleted_accounts = 0
+
+    with get_connection() as conn:
+        for account_id in selected_ids:
+            tx_count += int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM transactions WHERE account_id = ?",
+                    (account_id,),
+                ).fetchone()[0]
+            )
+            batch_count += int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM import_batches WHERE account_id = ?",
+                    (account_id,),
+                ).fetchone()[0]
+            )
+            anchor_count += int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM statement_anchors WHERE account_id = ?",
+                    (account_id,),
+                ).fetchone()[0]
+            )
+
+            conn.execute("DELETE FROM transactions WHERE account_id = ?", (account_id,))
+            conn.execute(
+                "DELETE FROM import_batches WHERE account_id = ?", (account_id,)
+            )
+            conn.execute(
+                "DELETE FROM statement_anchors WHERE account_id = ?", (account_id,)
+            )
+            result = conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+            deleted_accounts += int(result.rowcount > 0)
+
+    deleted_id_set = set(selected_ids)
+    queued = list(uploaded_files or [])
+    kept_files: list[dict[str, Any]] = []
+    for row in queued:
+        raw_account_id = row.get("account_id")
+        if raw_account_id is None or str(raw_account_id) == "":
+            kept_files.append(row)
+            continue
+        try:
+            account_id = int(raw_account_id)
+        except TypeError, ValueError:
+            kept_files.append(row)
+            continue
+        if account_id not in deleted_id_set:
+            kept_files.append(row)
+
+    message = (
+        f"Removed {deleted_accounts} account(s), {tx_count} transaction(s), "
+        f"{batch_count} import batch(es), and {anchor_count} anchor(s)."
+    )
+
+    return (
+        message,
+        accounts_refresh_token + 1,
+        [],
+        kept_files,
+        _file_rows_for_table(kept_files),
     )
 
 

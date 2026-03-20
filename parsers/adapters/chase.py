@@ -11,18 +11,17 @@ from .common import (
 )
 
 
-class CapitalOneAdapter:
-    institution = "capitalone"
+class ChaseAdapter:
+    institution = "chase"
     has_header = True
 
     def parse_row(self, row: dict[str, str], source_file: str) -> TransactionRecord:
         occurred_on = parse_date(row.get("Transaction Date", ""))
-        posted_on = parse_date_optional(row.get("Posted Date", ""))
+        posted_on = parse_date_optional(row.get("Post Date", ""))
         description = clean(row.get("Description", ""))
         category_raw = clean_optional(row.get("Category", ""))
-        debit = parse_money(row.get("Debit", ""))
-        credit = parse_money(row.get("Credit", ""))
-        amount_cents = credit - debit
+        amount_cents = parse_money(row.get("Amount", ""))
+
         external_id = stable_external_id(
             self.institution,
             occurred_on,
@@ -30,6 +29,8 @@ class CapitalOneAdapter:
             description,
             str(amount_cents),
             category_raw or "",
+            clean_optional(row.get("Type", "")) or "",
+            clean_optional(row.get("Memo", "")) or "",
         )
 
         return TransactionRecord(

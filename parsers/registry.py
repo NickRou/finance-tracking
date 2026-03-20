@@ -1,11 +1,19 @@
 from __future__ import annotations
 
-from .adapters import CapitalOneAdapter
+from .adapters import (
+    AmericanExpressAdapter,
+    CapitalOneAdapter,
+    ChaseAdapter,
+    DiscoverAdapter,
+)
 from .base import InstitutionAdapter
 
 
 _ADAPTERS: dict[str, InstitutionAdapter] = {
+    "americanexpress": AmericanExpressAdapter(),
     "capitalone": CapitalOneAdapter(),
+    "chase": ChaseAdapter(),
+    "discover": DiscoverAdapter(),
 }
 
 

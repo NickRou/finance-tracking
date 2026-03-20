@@ -11,12 +11,18 @@ Change `FINANCE_DB_PATH` in `.env` if you want a different location.
 
 ## CSV import
 
-Import Capital One CSV files using the generic parser pipeline plus institution adapter:
+Import institution files using the generic parser pipeline plus adapters:
 
 ```bash
 uv run python -m parsers.import_csv --institution capitalone --file /path/to/capitalone.csv
+uv run python -m parsers.import_csv --institution chase --file /path/to/chase.csv
+uv run python -m parsers.import_csv --institution discover --file /path/to/discover.csv
+uv run python -m parsers.import_csv --institution americanexpress --file /path/to/amex.csv
 ```
 
-Capital One headers expected by the adapter:
+Supported formats:
 
-`Transaction Date, Posted Date, Card No., Description, Category, Debit, Credit`
+- Capital One headers: `Transaction Date, Posted Date, Card No., Description, Category, Debit, Credit`
+- Chase headers: `Transaction Date, Post Date, Description, Category, Type, Amount, Memo`
+- Discover headers: `Trans. Date, Post Date, Description, Amount, Category`
+- American Express: no header row, each row is `date,description,amount` (tab or comma delimited)

@@ -14,6 +14,7 @@ app.title = "Local Finance Tracking"
 
 app.layout = html.Div(
     [
+        dcc.Store(id="inv-dashboard-cache", storage_type="session"),
         html.Div(
             [
                 html.Div(

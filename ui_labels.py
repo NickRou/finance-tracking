@@ -21,8 +21,6 @@ _ASSET_TYPE_LABELS: dict[str, str] = {
     "cash": "Cash",
     "stock_etf": "Stock / ETF",
     "crypto": "Crypto",
-    "bond_fund": "Bond Fund",
-    "other": "Other",
 }
 
 
@@ -49,3 +47,11 @@ def format_asset_type(value: str) -> str:
     if not key:
         return ""
     return _ASSET_TYPE_LABELS.get(key, _snake_to_title(key))
+
+
+def format_money(value: float | None) -> str:
+    if value is None:
+        return "-"
+    if value < 0:
+        return f"(${abs(value):,.2f})"
+    return f"${value:,.2f}"

@@ -111,12 +111,16 @@ def initialize_database() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 account_id INTEGER NOT NULL,
                 asset_type TEXT NOT NULL CHECK (
-                    asset_type IN ('cash', 'stock_etf', 'crypto', 'bond_fund', 'other')
+                    asset_type IN ('cash', 'stock_etf', 'crypto')
+                ),
+                valuation_method TEXT NOT NULL DEFAULT 'market' CHECK (
+                    valuation_method IN ('market', 'manual')
                 ),
                 symbol TEXT,
                 name TEXT NOT NULL,
                 quantity REAL,
                 cost_basis_total_cents INTEGER,
+                manual_market_value_cents INTEGER,
                 cash_balance_cents INTEGER,
                 currency TEXT NOT NULL DEFAULT 'USD',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -125,25 +129,42 @@ def initialize_database() -> None:
                 CHECK (
                     (
                         asset_type = 'cash'
+                        AND valuation_method = 'manual'
                         AND symbol IS NULL
                         AND quantity IS NULL
                         AND cost_basis_total_cents IS NULL
+                        AND manual_market_value_cents IS NULL
                         AND cash_balance_cents IS NOT NULL
                     )
                     OR
                     (
                         asset_type != 'cash'
+                        AND valuation_method = 'market'
                         AND symbol IS NOT NULL
                         AND quantity IS NOT NULL
                         AND quantity > 0
                         AND cost_basis_total_cents IS NOT NULL
                         AND cost_basis_total_cents > 0
+                        AND manual_market_value_cents IS NULL
+                        AND cash_balance_cents IS NULL
+                    )
+                    OR
+                    (
+                        asset_type != 'cash'
+                        AND valuation_method = 'manual'
+                        AND symbol IS NULL
+                        AND quantity IS NULL
+                        AND cost_basis_total_cents IS NOT NULL
+                        AND cost_basis_total_cents > 0
+                        AND manual_market_value_cents IS NOT NULL
+                        AND manual_market_value_cents >= 0
                         AND cash_balance_cents IS NULL
                     )
                 )
             )
             """
         )
+        _migrate_investment_holdings_table(conn)
 
 
 def _table_columns(conn: Any, table_name: str) -> set[str]:
@@ -188,6 +209,110 @@ def _migrate_transactions_table(conn: Any) -> None:
         conn.execute(
             "UPDATE transactions SET category = category_raw WHERE category = ''"
         )
+
+
+def _migrate_investment_holdings_table(conn: Any) -> None:
+    columns = _table_columns(conn, "investment_holdings")
+    required = {"valuation_method", "manual_market_value_cents"}
+    if required.issubset(columns):
+        return
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS investment_holdings_v2 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL,
+            asset_type TEXT NOT NULL CHECK (
+                asset_type IN ('cash', 'stock_etf', 'crypto')
+            ),
+            valuation_method TEXT NOT NULL DEFAULT 'market' CHECK (
+                valuation_method IN ('market', 'manual')
+            ),
+            symbol TEXT,
+            name TEXT NOT NULL,
+            quantity REAL,
+            cost_basis_total_cents INTEGER,
+            manual_market_value_cents INTEGER,
+            cash_balance_cents INTEGER,
+            currency TEXT NOT NULL DEFAULT 'USD',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            CHECK (
+                (
+                    asset_type = 'cash'
+                    AND valuation_method = 'manual'
+                    AND symbol IS NULL
+                    AND quantity IS NULL
+                    AND cost_basis_total_cents IS NULL
+                    AND manual_market_value_cents IS NULL
+                    AND cash_balance_cents IS NOT NULL
+                )
+                OR
+                (
+                    asset_type != 'cash'
+                    AND valuation_method = 'market'
+                    AND symbol IS NOT NULL
+                    AND quantity IS NOT NULL
+                    AND quantity > 0
+                    AND cost_basis_total_cents IS NOT NULL
+                    AND cost_basis_total_cents > 0
+                    AND manual_market_value_cents IS NULL
+                    AND cash_balance_cents IS NULL
+                )
+                OR
+                (
+                    asset_type != 'cash'
+                    AND valuation_method = 'manual'
+                    AND symbol IS NULL
+                    AND quantity IS NULL
+                    AND cost_basis_total_cents IS NOT NULL
+                    AND cost_basis_total_cents > 0
+                    AND manual_market_value_cents IS NOT NULL
+                    AND manual_market_value_cents >= 0
+                    AND cash_balance_cents IS NULL
+                )
+            )
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        INSERT INTO investment_holdings_v2 (
+            id,
+            account_id,
+            asset_type,
+            valuation_method,
+            symbol,
+            name,
+            quantity,
+            cost_basis_total_cents,
+            manual_market_value_cents,
+            cash_balance_cents,
+            currency,
+            created_at,
+            updated_at
+        )
+        SELECT
+            id,
+            account_id,
+            asset_type,
+            CASE WHEN asset_type = 'cash' THEN 'manual' ELSE 'market' END,
+            symbol,
+            name,
+            quantity,
+            cost_basis_total_cents,
+            NULL,
+            cash_balance_cents,
+            currency,
+            created_at,
+            updated_at
+        FROM investment_holdings
+        """
+    )
+    conn.execute("DROP TABLE investment_holdings")
+    conn.execute("ALTER TABLE investment_holdings_v2 RENAME TO investment_holdings")
 
 
 def upsert_statement_anchor(
@@ -291,10 +416,12 @@ def list_investment_holdings() -> list[dict[str, Any]]:
                 a.name AS account_name,
                 a.institution,
                 h.asset_type,
+                h.valuation_method,
                 h.symbol,
                 h.name,
                 h.quantity,
                 h.cost_basis_total_cents,
+                h.manual_market_value_cents,
                 h.cash_balance_cents,
                 h.currency
             FROM investment_holdings h
@@ -310,12 +437,14 @@ def list_investment_holdings() -> list[dict[str, Any]]:
             "account_name": str(row[2]),
             "institution": str(row[3]),
             "asset_type": str(row[4]),
-            "symbol": str(row[5]) if row[5] is not None else None,
-            "name": str(row[6]),
-            "quantity": float(row[7]) if row[7] is not None else None,
-            "cost_basis_total_cents": int(row[8]) if row[8] is not None else None,
-            "cash_balance_cents": int(row[9]) if row[9] is not None else None,
-            "currency": str(row[10]),
+            "valuation_method": str(row[5]),
+            "symbol": str(row[6]) if row[6] is not None else None,
+            "name": str(row[7]),
+            "quantity": float(row[8]) if row[8] is not None else None,
+            "cost_basis_total_cents": int(row[9]) if row[9] is not None else None,
+            "manual_market_value_cents": int(row[10]) if row[10] is not None else None,
+            "cash_balance_cents": int(row[11]) if row[11] is not None else None,
+            "currency": str(row[12]),
         }
         for row in rows
     ]
@@ -325,10 +454,12 @@ def create_investment_holding(
     *,
     account_id: int,
     asset_type: str,
+    valuation_method: str,
     symbol: str | None,
     name: str,
     quantity: float | None,
     cost_basis_total_cents: int | None,
+    manual_market_value_cents: int | None,
     cash_balance_cents: int | None,
     currency: str = "USD",
 ) -> None:
@@ -338,21 +469,25 @@ def create_investment_holding(
             INSERT INTO investment_holdings (
                 account_id,
                 asset_type,
+                valuation_method,
                 symbol,
                 name,
                 quantity,
                 cost_basis_total_cents,
+                manual_market_value_cents,
                 cash_balance_cents,
                 currency
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 account_id,
                 asset_type,
+                valuation_method,
                 symbol,
                 name,
                 quantity,
                 cost_basis_total_cents,
+                manual_market_value_cents,
                 cash_balance_cents,
                 currency,
             ),

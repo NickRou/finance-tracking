@@ -11,6 +11,7 @@ from dash import (
     Output,
     State,
     callback,
+    ctx,
     dash_table,
     dcc,
     html,
@@ -20,7 +21,11 @@ from dash import (
 
 from db import get_connection, list_transaction_accounts, upsert_statement_anchor
 from parsers.pipeline import ImportSummary, import_csv
-from ui_labels import format_account_type, format_institution
+from ui_labels import (
+    format_account_type,
+    format_institution,
+    format_money as format_money_display,
+)
 
 
 register_page(__name__, path="/transactions", title="Transactions")
@@ -28,7 +33,7 @@ register_page(__name__, path="/transactions", title="Transactions")
 
 def _format_money(cents: int | None) -> str:
     value = 0 if cents is None else cents
-    return f"${value / 100:,.2f}"
+    return format_money_display(value / 100)
 
 
 def _parse_dollars_to_cents(value: str | int | float | None) -> int:
@@ -202,104 +207,208 @@ def _card_style() -> dict[str, str]:
     }
 
 
+def _modal_overlay_style(is_open: bool) -> dict[str, str]:
+    if is_open:
+        return {
+            "display": "flex",
+            "visibility": "visible",
+            "opacity": "1",
+            "pointerEvents": "auto",
+        }
+    return {
+        "display": "flex",
+        "visibility": "hidden",
+        "opacity": "0",
+        "pointerEvents": "none",
+    }
+
+
 def layout() -> html.Div:
     account_options = _account_dropdown_options()
     default_account = int(account_options[0]["value"]) if account_options else None
 
     return html.Div(
         [
-            html.H2("Transactions"),
-            html.P(
-                "Upload CSV files, tag each file by account, and import into your encrypted database."
-            ),
-            html.H3("Import Files"),
-            dcc.Upload(
-                id="tx-upload-files",
-                children=html.Button("Select Files"),
-                multiple=True,
-                style={
-                    "display": "inline-block",
-                    "marginBottom": "12px",
-                },
-            ),
-            dash_table.DataTable(
-                id="tx-file-tag-table",
-                columns=[
-                    {"name": "File", "id": "filename", "editable": False},
-                    {"name": "Account", "id": "account_id", "presentation": "dropdown"},
-                ],
-                data=[],
-                editable=True,
-                row_selectable="multi",
-                selected_rows=[],
-                dropdown={"account_id": {"options": account_options}},
-                style_table={
-                    "marginBottom": "12px",
-                    "overflowX": "auto",
-                    "overflowY": "auto",
-                    "maxHeight": "300px",
-                },
-                style_cell={"textAlign": "left", "padding": "8px"},
-            ),
             html.Div(
                 [
-                    html.Button(
-                        "+ Import Tagged Files", id="tx-import-files", n_clicks=0
-                    ),
-                    html.Button(
-                        "- Remove Selected Files",
-                        id="tx-remove-selected-files",
-                        n_clicks=0,
-                        disabled=True,
+                    html.H2("Transactions", style={"marginBottom": "0"}),
+                    html.Div(
+                        [
+                            html.Button(
+                                "Import Files",
+                                id="tx-open-import-modal",
+                                n_clicks=0,
+                            ),
+                            html.Button(
+                                "Statement Anchor",
+                                id="tx-open-anchor-modal",
+                                n_clicks=0,
+                            ),
+                        ],
+                        style={
+                            "display": "flex",
+                            "gap": "10px",
+                            "alignItems": "center",
+                        },
                     ),
                 ],
                 style={
                     "display": "flex",
-                    "gap": "10px",
-                    "alignItems": "center",
-                    "marginBottom": "2px",
-                },
-            ),
-            html.Div(id="tx-upload-message", style={"marginTop": "10px"}),
-            html.Div(
-                id="tx-import-message",
-                style={"marginTop": "10px", "marginBottom": "20px"},
-            ),
-            html.H3("Statement Anchor"),
-            html.Div(
-                [
-                    dcc.Dropdown(
-                        id="tx-anchor-account",
-                        options=account_options,
-                        value=default_account,
-                        clearable=False,
-                        style={"minWidth": "220px"},
-                    ),
-                    dcc.Input(
-                        id="tx-anchor-balance",
-                        type="number",
-                        placeholder="Statement balance",
-                        step="0.01",
-                        style={"minWidth": "220px"},
-                    ),
-                    dcc.DatePickerSingle(
-                        id="tx-anchor-date", placeholder="Statement date"
-                    ),
-                    html.Button(
-                        "Save Anchor",
-                        id="tx-save-anchor",
-                        n_clicks=0,
-                        style={"height": "38px", "padding": "0 12px"},
-                    ),
-                ],
-                style={
-                    "display": "flex",
-                    "gap": "10px",
+                    "justifyContent": "space-between",
                     "alignItems": "center",
                     "marginBottom": "8px",
                 },
             ),
-            html.Div(id="tx-anchor-message", style={"marginBottom": "16px"}),
+            html.P("Review balances, anchors, and recent transactions by account."),
+            html.Div(
+                id="tx-import-modal-overlay",
+                className="tx-import-modal-overlay",
+                style=_modal_overlay_style(False),
+                children=[
+                    html.Div(
+                        className="tx-import-modal",
+                        children=[
+                            html.Div(
+                                [
+                                    html.H3("Import Files", style={"margin": "0"}),
+                                    html.Button(
+                                        "Close",
+                                        id="tx-close-import-modal",
+                                        n_clicks=0,
+                                    ),
+                                ],
+                                className="tx-import-modal-header",
+                            ),
+                            dcc.Upload(
+                                id="tx-upload-files",
+                                children=html.Button("Select Files"),
+                                multiple=True,
+                                style={
+                                    "display": "inline-block",
+                                    "marginBottom": "12px",
+                                },
+                            ),
+                            dash_table.DataTable(
+                                id="tx-file-tag-table",
+                                columns=[
+                                    {
+                                        "name": "File",
+                                        "id": "filename",
+                                        "editable": False,
+                                    },
+                                    {
+                                        "name": "Account",
+                                        "id": "account_id",
+                                        "presentation": "dropdown",
+                                    },
+                                ],
+                                data=[],
+                                editable=True,
+                                row_selectable="multi",
+                                selected_rows=[],
+                                dropdown={"account_id": {"options": account_options}},
+                                style_table={
+                                    "marginBottom": "12px",
+                                    "overflowX": "auto",
+                                    "overflowY": "auto",
+                                    "maxHeight": "300px",
+                                },
+                                style_cell={"textAlign": "left", "padding": "8px"},
+                            ),
+                            html.Div(
+                                [
+                                    html.Button(
+                                        "+ Import Tagged Files",
+                                        id="tx-import-files",
+                                        n_clicks=0,
+                                    ),
+                                    html.Button(
+                                        "- Remove Selected Files",
+                                        id="tx-remove-selected-files",
+                                        n_clicks=0,
+                                        disabled=True,
+                                    ),
+                                ],
+                                style={
+                                    "display": "flex",
+                                    "gap": "10px",
+                                    "alignItems": "center",
+                                    "marginBottom": "2px",
+                                },
+                            ),
+                            html.Div(
+                                id="tx-upload-message", style={"marginTop": "10px"}
+                            ),
+                            html.Div(
+                                id="tx-import-message",
+                                style={"marginTop": "10px", "marginBottom": "4px"},
+                            ),
+                        ],
+                    )
+                ],
+            ),
+            html.Div(
+                id="tx-anchor-modal-overlay",
+                className="tx-anchor-modal-overlay",
+                style=_modal_overlay_style(False),
+                children=[
+                    html.Div(
+                        className="tx-anchor-modal",
+                        children=[
+                            html.Div(
+                                [
+                                    html.H3("Statement Anchor", style={"margin": "0"}),
+                                    html.Button(
+                                        "Close",
+                                        id="tx-close-anchor-modal",
+                                        n_clicks=0,
+                                    ),
+                                ],
+                                className="tx-anchor-modal-header",
+                            ),
+                            html.Div(
+                                [
+                                    dcc.Dropdown(
+                                        id="tx-anchor-account",
+                                        options=account_options,
+                                        value=default_account,
+                                        clearable=False,
+                                        style={"minWidth": "220px"},
+                                    ),
+                                    dcc.Input(
+                                        id="tx-anchor-balance",
+                                        type="number",
+                                        placeholder="Statement balance",
+                                        step="0.01",
+                                        style={"minWidth": "220px"},
+                                    ),
+                                    dcc.DatePickerSingle(
+                                        id="tx-anchor-date",
+                                        placeholder="Statement date",
+                                        style={"minWidth": "170px"},
+                                    ),
+                                    html.Button(
+                                        "Save Anchor",
+                                        id="tx-save-anchor",
+                                        n_clicks=0,
+                                        style={"height": "38px", "padding": "0 12px"},
+                                    ),
+                                ],
+                                style={
+                                    "display": "flex",
+                                    "gap": "10px",
+                                    "alignItems": "center",
+                                    "marginBottom": "8px",
+                                },
+                            ),
+                            html.Div(
+                                id="tx-anchor-message",
+                                style={"marginBottom": "4px"},
+                            ),
+                        ],
+                    )
+                ],
+            ),
             html.H3("Overview"),
             html.H4("By Account"),
             dash_table.DataTable(
@@ -321,7 +430,7 @@ def layout() -> html.Div:
                 style_table={"overflowX": "auto", "marginBottom": "20px"},
                 style_cell={"textAlign": "left", "padding": "8px"},
             ),
-            html.H4("Recent Transactions"),
+            html.H4("Transactions"),
             dcc.Dropdown(
                 id="tx-transactions-account-filter",
                 options=[{"label": "All", "value": "all"}] + account_options,
@@ -330,7 +439,7 @@ def layout() -> html.Div:
                 style={"maxWidth": "300px", "marginBottom": "10px"},
             ),
             dash_table.DataTable(
-                id="tx-recent-transactions",
+                id="tx-transactions-table",
                 columns=[
                     {"name": "Occurred On", "id": "occurred_on"},
                     {"name": "Posted On", "id": "posted_on"},
@@ -340,15 +449,113 @@ def layout() -> html.Div:
                     {"name": "Amount", "id": "amount"},
                 ],
                 data=[],
-                page_size=10,
-                style_table={"overflowX": "auto"},
-                style_cell={"textAlign": "left", "padding": "8px"},
+                virtualization=True,
+                fixed_rows={"headers": True},
+                fill_width=False,
+                style_table={
+                    "height": "780px",
+                    "overflowY": "auto",
+                    "overflowX": "auto",
+                },
+                style_cell={
+                    "textAlign": "left",
+                    "padding": "8px",
+                    "overflow": "hidden",
+                    "textOverflow": "ellipsis",
+                    "whiteSpace": "nowrap",
+                },
+                style_cell_conditional=[
+                    {
+                        "if": {"column_id": "occurred_on"},
+                        "minWidth": "100px",
+                        "width": "100px",
+                        "maxWidth": "100px",
+                    },
+                    {
+                        "if": {"column_id": "posted_on"},
+                        "minWidth": "100px",
+                        "width": "100px",
+                        "maxWidth": "100px",
+                    },
+                    {
+                        "if": {"column_id": "institution"},
+                        "minWidth": "160px",
+                        "width": "160px",
+                        "maxWidth": "160px",
+                    },
+                    {
+                        "if": {"column_id": "description"},
+                        "minWidth": "420px",
+                        "width": "420px",
+                        "maxWidth": "420px",
+                    },
+                    {
+                        "if": {"column_id": "category"},
+                        "minWidth": "200px",
+                        "width": "200px",
+                        "maxWidth": "200px",
+                    },
+                    {
+                        "if": {"column_id": "amount"},
+                        "minWidth": "183px",
+                        "width": "183px",
+                        "maxWidth": "183px",
+                    },
+                ],
             ),
             dcc.Store(id="tx-uploaded-files-store", data=[]),
             dcc.Store(id="tx-refresh-token", data=0),
+            dcc.Store(id="tx-import-modal-open", data=False),
+            dcc.Store(id="tx-anchor-modal-open", data=False),
         ],
         className="page page-transactions",
     )
+
+
+@callback(
+    Output("tx-import-modal-open", "data"),
+    Output("tx-import-modal-overlay", "style"),
+    Input("tx-open-import-modal", "n_clicks"),
+    Input("tx-close-import-modal", "n_clicks"),
+    State("tx-import-modal-open", "data"),
+    prevent_initial_call=True,
+)
+def toggle_import_modal(
+    open_clicks: int,
+    close_clicks: int,
+    is_open: bool,
+) -> tuple[bool, dict[str, str]]:
+    trigger = ctx.triggered_id
+    if trigger == "tx-open-import-modal":
+        next_state = True
+    elif trigger == "tx-close-import-modal":
+        next_state = False
+    else:
+        next_state = bool(is_open)
+    return next_state, _modal_overlay_style(next_state)
+
+
+@callback(
+    Output("tx-anchor-modal-open", "data"),
+    Output("tx-anchor-modal-overlay", "style"),
+    Input("tx-open-anchor-modal", "n_clicks"),
+    Input("tx-close-anchor-modal", "n_clicks"),
+    State("tx-anchor-modal-open", "data"),
+    prevent_initial_call=True,
+)
+def toggle_anchor_modal(
+    open_clicks: int,
+    close_clicks: int,
+    is_open: bool,
+) -> tuple[bool, dict[str, str]]:
+    trigger = ctx.triggered_id
+    if trigger == "tx-open-anchor-modal":
+        next_state = True
+    elif trigger == "tx-close-anchor-modal":
+        next_state = False
+    else:
+        next_state = bool(is_open)
+    return next_state, _modal_overlay_style(next_state)
 
 
 @callback(
@@ -650,7 +857,7 @@ def refresh_overview(
 
 
 @callback(
-    Output("tx-recent-transactions", "data"),
+    Output("tx-transactions-table", "data"),
     Input("tx-refresh-token", "data"),
     Input("tx-transactions-account-filter", "value"),
 )

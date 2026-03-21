@@ -165,6 +165,42 @@ def initialize_database() -> None:
             """
         )
         _migrate_investment_holdings_table(conn)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS investment_holding_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                holding_id INTEGER NOT NULL,
+                account_id INTEGER NOT NULL,
+                snapshot_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                event_type TEXT NOT NULL CHECK (
+                    event_type IN ('add', 'manual_update', 'delete', 'backfill')
+                ),
+                asset_type TEXT NOT NULL,
+                valuation_method TEXT NOT NULL,
+                symbol TEXT,
+                name TEXT NOT NULL,
+                quantity REAL,
+                cost_basis_total_cents INTEGER,
+                manual_market_value_cents INTEGER,
+                cash_balance_cents INTEGER,
+                market_value_cents INTEGER,
+                currency TEXT NOT NULL DEFAULT 'USD'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_holding_snapshots_holding_ts
+            ON investment_holding_snapshots (holding_id, snapshot_ts)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_holding_snapshots_account_ts
+            ON investment_holding_snapshots (account_id, snapshot_ts)
+            """
+        )
+        _backfill_investment_holding_snapshots(conn)
 
 
 def _table_columns(conn: Any, table_name: str) -> set[str]:
@@ -315,6 +351,77 @@ def _migrate_investment_holdings_table(conn: Any) -> None:
     conn.execute("ALTER TABLE investment_holdings_v2 RENAME TO investment_holdings")
 
 
+def _snapshot_market_value_cents_from_row(row: dict[str, Any]) -> int | None:
+    asset_type = str(row.get("asset_type") or "")
+    valuation_method = str(row.get("valuation_method") or "")
+    if asset_type == "cash":
+        value = row.get("cash_balance_cents")
+        return int(value) if value is not None else 0
+    if valuation_method == "manual":
+        value = row.get("manual_market_value_cents")
+        return int(value) if value is not None else 0
+    return None
+
+
+def _backfill_investment_holding_snapshots(conn: Any) -> None:
+    snapshot_count = int(
+        conn.execute("SELECT COUNT(*) FROM investment_holding_snapshots").fetchone()[0]
+    )
+    if snapshot_count > 0:
+        return
+
+    rows = conn.execute(
+        """
+        SELECT
+            id,
+            account_id,
+            asset_type,
+            valuation_method,
+            symbol,
+            name,
+            quantity,
+            cost_basis_total_cents,
+            manual_market_value_cents,
+            cash_balance_cents,
+            currency
+        FROM investment_holdings
+        """
+    ).fetchall()
+    if not rows:
+        return
+
+    for row in rows:
+        row_data: dict[str, Any] = {
+            "holding_id": int(row[0]),
+            "account_id": int(row[1]),
+            "asset_type": str(row[2]),
+            "valuation_method": str(row[3]),
+            "symbol": str(row[4]) if row[4] is not None else None,
+            "name": str(row[5]),
+            "quantity": float(row[6]) if row[6] is not None else None,
+            "cost_basis_total_cents": int(row[7]) if row[7] is not None else None,
+            "manual_market_value_cents": int(row[8]) if row[8] is not None else None,
+            "cash_balance_cents": int(row[9]) if row[9] is not None else None,
+            "currency": str(row[10]),
+        }
+        create_investment_holding_snapshot(
+            holding_id=row_data["holding_id"],
+            account_id=row_data["account_id"],
+            event_type="backfill",
+            asset_type=row_data["asset_type"],
+            valuation_method=row_data["valuation_method"],
+            symbol=row_data["symbol"],
+            name=row_data["name"],
+            quantity=row_data["quantity"],
+            cost_basis_total_cents=row_data["cost_basis_total_cents"],
+            manual_market_value_cents=row_data["manual_market_value_cents"],
+            cash_balance_cents=row_data["cash_balance_cents"],
+            market_value_cents=_snapshot_market_value_cents_from_row(row_data),
+            currency=row_data["currency"],
+            conn=conn,
+        )
+
+
 def upsert_statement_anchor(
     *, account_id: int, anchor_date: str, anchor_balance_cents: int
 ) -> None:
@@ -391,7 +498,7 @@ def list_investment_accounts() -> list[dict[str, Any]]:
             """
             SELECT id, name, institution, account_type
             FROM accounts
-            WHERE account_type = 'investment_account'
+            WHERE account_type IN ('investment_account', 'savings_account')
             ORDER BY institution ASC, name ASC
             """
         ).fetchall()
@@ -462,9 +569,9 @@ def create_investment_holding(
     manual_market_value_cents: int | None,
     cash_balance_cents: int | None,
     currency: str = "USD",
-) -> None:
+) -> int:
     with get_connection() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO investment_holdings (
                 account_id,
@@ -491,6 +598,170 @@ def create_investment_holding(
                 cash_balance_cents,
                 currency,
             ),
+        )
+        return int(cursor.lastrowid)
+
+
+def update_investment_holding(
+    *,
+    holding_id: int,
+    asset_type: str,
+    valuation_method: str,
+    symbol: str | None,
+    name: str,
+    quantity: float | None,
+    cost_basis_total_cents: int | None,
+    manual_market_value_cents: int | None,
+    cash_balance_cents: int | None,
+) -> int:
+    with get_connection() as conn:
+        before = conn.total_changes
+        conn.execute(
+            """
+            UPDATE investment_holdings
+            SET
+                asset_type = ?,
+                valuation_method = ?,
+                symbol = ?,
+                name = ?,
+                quantity = ?,
+                cost_basis_total_cents = ?,
+                manual_market_value_cents = ?,
+                cash_balance_cents = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                asset_type,
+                valuation_method,
+                symbol,
+                name,
+                quantity,
+                cost_basis_total_cents,
+                manual_market_value_cents,
+                cash_balance_cents,
+                holding_id,
+            ),
+        )
+        return conn.total_changes - before
+
+
+def get_investment_holding_by_id(holding_id: int) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                id,
+                account_id,
+                asset_type,
+                valuation_method,
+                symbol,
+                name,
+                quantity,
+                cost_basis_total_cents,
+                manual_market_value_cents,
+                cash_balance_cents,
+                currency
+            FROM investment_holdings
+            WHERE id = ?
+            """,
+            (holding_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "id": int(row[0]),
+        "account_id": int(row[1]),
+        "asset_type": str(row[2]),
+        "valuation_method": str(row[3]),
+        "symbol": str(row[4]) if row[4] is not None else None,
+        "name": str(row[5]),
+        "quantity": float(row[6]) if row[6] is not None else None,
+        "cost_basis_total_cents": int(row[7]) if row[7] is not None else None,
+        "manual_market_value_cents": int(row[8]) if row[8] is not None else None,
+        "cash_balance_cents": int(row[9]) if row[9] is not None else None,
+        "currency": str(row[10]),
+    }
+
+
+def create_investment_holding_snapshot(
+    *,
+    holding_id: int,
+    account_id: int,
+    event_type: str,
+    asset_type: str,
+    valuation_method: str,
+    symbol: str | None,
+    name: str,
+    quantity: float | None,
+    cost_basis_total_cents: int | None,
+    manual_market_value_cents: int | None,
+    cash_balance_cents: int | None,
+    market_value_cents: int | None,
+    currency: str = "USD",
+    conn: Any | None = None,
+) -> None:
+    params = (
+        holding_id,
+        account_id,
+        event_type,
+        asset_type,
+        valuation_method,
+        symbol,
+        name,
+        quantity,
+        cost_basis_total_cents,
+        manual_market_value_cents,
+        cash_balance_cents,
+        market_value_cents,
+        currency,
+    )
+
+    if conn is not None:
+        conn.execute(
+            """
+            INSERT INTO investment_holding_snapshots (
+                holding_id,
+                account_id,
+                event_type,
+                asset_type,
+                valuation_method,
+                symbol,
+                name,
+                quantity,
+                cost_basis_total_cents,
+                manual_market_value_cents,
+                cash_balance_cents,
+                market_value_cents,
+                currency
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            params,
+        )
+        return
+
+    with get_connection() as snapshot_conn:
+        snapshot_conn.execute(
+            """
+            INSERT INTO investment_holding_snapshots (
+                holding_id,
+                account_id,
+                event_type,
+                asset_type,
+                valuation_method,
+                symbol,
+                name,
+                quantity,
+                cost_basis_total_cents,
+                manual_market_value_cents,
+                cash_balance_cents,
+                market_value_cents,
+                currency
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            params,
         )
 
 

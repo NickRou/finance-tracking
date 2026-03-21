@@ -21,12 +21,16 @@ import yfinance as yf
 
 from db import (
     create_investment_holding,
+    create_investment_holding_snapshot,
     delete_investment_holdings,
+    get_investment_holding_by_id,
     list_investment_accounts,
     list_investment_holdings,
+    update_investment_holding,
 )
 from ui_labels import (
     format_asset_type,
+    format_account_type,
     format_institution,
     format_money as format_money_display,
 )
@@ -37,7 +41,7 @@ register_page(__name__, path="/investments", title="Investments")
 ASSET_TYPES = ["cash", "stock_etf", "crypto"]
 VALUATION_METHODS = ["market", "manual"]
 CACHE_TTL_SECONDS = 15 * 60
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 DONUT_DOMAIN_X = [0.08, 0.78]
 
 
@@ -62,6 +66,7 @@ def _build_cache_payload(
     account_rows: list[dict[str, Any]],
     figure: go.Figure,
     allocation_rows: list[dict[str, Any]],
+    total_market_value_cents: int,
 ) -> dict[str, Any]:
     return {
         "version": CACHE_VERSION,
@@ -70,6 +75,7 @@ def _build_cache_payload(
         "account_rows": account_rows,
         "figure": figure.to_plotly_json(),
         "allocation_rows": allocation_rows,
+        "total_market_value_cents": total_market_value_cents,
     }
 
 
@@ -97,7 +103,8 @@ def _investment_account_options() -> list[dict[str, str | int]]:
             {
                 "label": (
                     f"{account['name']} "
-                    f"({format_institution(str(account['institution']))})"
+                    f"({format_institution(str(account['institution']))}, "
+                    f"{format_account_type(str(account['account_type']))})"
                 ),
                 "value": int(account["id"]),
             }
@@ -265,6 +272,7 @@ def _build_dashboard_data() -> tuple[
     list[dict[str, Any]],
     go.Figure,
     list[dict[str, Any]],
+    int,
 ]:
     holdings = list_investment_holdings()
 
@@ -284,6 +292,7 @@ def _build_dashboard_data() -> tuple[
     table_rows: list[dict[str, Any]] = []
     allocation_rows: list[dict[str, Any]] = []
     by_account: dict[int, dict[str, Any]] = {}
+    total_market_value_cents = 0
 
     for row in holdings:
         holding_id = int(row["id"])
@@ -342,6 +351,7 @@ def _build_dashboard_data() -> tuple[
         agg["cost_basis"] += cost_basis
         if asset_type == "cash":
             agg["cash_value"] += market_value
+        total_market_value_cents += int(round(market_value * 100))
 
         table_rows.append(
             {
@@ -357,7 +367,10 @@ def _build_dashboard_data() -> tuple[
                 "market_value": _format_money(market_value),
                 "unrealized_pl": _format_money(unrealized),
                 "note": note,
-                "action": "![Delete](/assets/svgs/trash-2.svg)",
+                "action": (
+                    f"[![Edit](/assets/svgs/pencil.svg)](#inv-edit-{holding_id}) "
+                    f"[![Delete](/assets/svgs/trash-2.svg)](#inv-delete-{holding_id})"
+                ),
             }
         )
 
@@ -397,7 +410,7 @@ def _build_dashboard_data() -> tuple[
         )
 
     figure = _build_account_distribution_chart(by_account)
-    return table_rows, account_rows, figure, allocation_rows
+    return table_rows, account_rows, figure, allocation_rows, total_market_value_cents
 
 
 def _modal_overlay_style(is_open: bool) -> dict[str, str]:
@@ -455,7 +468,43 @@ def layout() -> html.Div:
                 },
             ),
             html.P(
-                "Track holdings, allocation, and performance across your investment accounts."
+                "Track holdings, allocation, and performance across your investment accounts.",
+                style={"margin": "0 0 10px 0"},
+            ),
+            html.Div(
+                [
+                    html.Span(
+                        "Total Market Value",
+                        style={
+                            "fontSize": "0.8rem",
+                            "fontWeight": "700",
+                            "textTransform": "uppercase",
+                            "letterSpacing": "0.04em",
+                            "color": "#7f7768",
+                        },
+                    ),
+                    html.Div(
+                        id="inv-total-market-value",
+                        children="$0.00",
+                        style={
+                            "fontSize": "1.25rem",
+                            "fontWeight": "700",
+                            "lineHeight": "1.15",
+                        },
+                    ),
+                ],
+                style={
+                    "display": "inline-flex",
+                    "flexDirection": "column",
+                    "alignItems": "flex-start",
+                    "gap": "2px",
+                    "padding": "8px 12px",
+                    "border": "1px solid #d7d1c6",
+                    "borderRadius": "10px",
+                    "backgroundColor": "#f8f4eb",
+                    "minWidth": "220px",
+                    "marginBottom": "10px",
+                },
             ),
             html.Div(
                 id="inv-add-modal-overlay",
@@ -467,7 +516,11 @@ def layout() -> html.Div:
                         children=[
                             html.Div(
                                 [
-                                    html.H3("Add Holding", style={"margin": "0"}),
+                                    html.H3(
+                                        "Add Holding",
+                                        id="inv-modal-title",
+                                        style={"margin": "0"},
+                                    ),
                                     html.Button(
                                         "Close",
                                         id="inv-close-add-modal",
@@ -616,13 +669,11 @@ def layout() -> html.Div:
                             {"name": "Institution", "id": "institution"},
                             {"name": "Type", "id": "asset_type"},
                             {"name": "Symbol", "id": "symbol"},
-                            {"name": "Name", "id": "name"},
                             {"name": "Quantity", "id": "quantity"},
                             {"name": "Cost Basis", "id": "cost_basis"},
                             {"name": "Latest Price", "id": "latest_price"},
                             {"name": "Market Value", "id": "market_value"},
                             {"name": "Unrealized P/L", "id": "unrealized_pl"},
-                            {"name": "Note", "id": "note"},
                             {
                                 "name": "",
                                 "id": "action",
@@ -630,7 +681,8 @@ def layout() -> html.Div:
                             },
                         ],
                         data=[],
-                        cell_selectable=True,
+                        cell_selectable=False,
+                        markdown_options={"link_target": "_self"},
                         style_table={"overflowX": "auto", "marginBottom": "12px"},
                         style_cell={"textAlign": "left", "padding": "8px"},
                         style_cell_conditional=cast(
@@ -638,9 +690,9 @@ def layout() -> html.Div:
                             [
                                 {
                                     "if": {"column_id": "action"},
-                                    "minWidth": "40px",
-                                    "width": "40px",
-                                    "maxWidth": "40px",
+                                    "minWidth": "64px",
+                                    "width": "64px",
+                                    "maxWidth": "64px",
                                     "textAlign": "center",
                                     "cursor": "pointer",
                                 }
@@ -710,6 +762,9 @@ def layout() -> html.Div:
             dcc.Store(id="inv-pending-delete", data=None),
             dcc.Store(id="inv-refresh-token", data=0),
             dcc.Store(id="inv-add-modal-open", data=False),
+            dcc.Store(id="inv-form-mode", data="add"),
+            dcc.Store(id="inv-edit-holding-id", data=None),
+            dcc.Location(id="inv-action-location", refresh=False),
         ],
         className="page page-investments",
     )
@@ -719,6 +774,8 @@ def layout() -> html.Div:
     Output("inv-add-modal-open", "data"),
     Output("inv-add-modal-overlay", "style"),
     Output("inv-remove-message", "children", allow_duplicate=True),
+    Output("inv-form-mode", "data", allow_duplicate=True),
+    Output("inv-edit-holding-id", "data", allow_duplicate=True),
     Input("inv-open-add-modal", "n_clicks"),
     Input("inv-close-add-modal", "n_clicks"),
     State("inv-add-modal-open", "data"),
@@ -728,7 +785,7 @@ def toggle_add_modal(
     open_clicks: int,
     close_clicks: int,
     is_open: bool,
-) -> tuple[bool, dict[str, str], str]:
+) -> tuple[bool, dict[str, str], str, str | Any, None | Any]:
     trigger = ctx.triggered_id
     if trigger == "inv-open-add-modal":
         next_state = True
@@ -736,10 +793,58 @@ def toggle_add_modal(
         next_state = False
     else:
         next_state = bool(is_open)
-    return next_state, _modal_overlay_style(next_state), ""
+    if next_state:
+        return next_state, _modal_overlay_style(next_state), "", "add", None
+    return next_state, _modal_overlay_style(next_state), "", no_update, no_update
 
 
 @callback(
+    Output("inv-add-holding", "children"),
+    Input("inv-form-mode", "data"),
+)
+def update_submit_label(form_mode: str | None) -> str:
+    if form_mode == "edit":
+        return "Save Changes"
+    return "Add Holding"
+
+
+@callback(
+    Output("inv-account", "disabled"),
+    Input("inv-form-mode", "data"),
+)
+def lock_account_on_edit(form_mode: str | None) -> bool:
+    return form_mode == "edit"
+
+
+@callback(
+    Output("inv-modal-title", "children"),
+    Input("inv-form-mode", "data"),
+    Input("inv-name", "value"),
+)
+def update_modal_title(form_mode: str | None, holding_name: str | None) -> str:
+    if form_mode != "edit":
+        return "Add Holding"
+    name = (holding_name or "").strip()
+    if name:
+        return f"Edit Holding: {name}"
+    return "Edit Holding"
+
+
+@callback(
+    Output("inv-form-mode", "data", allow_duplicate=True),
+    Output("inv-edit-holding-id", "data", allow_duplicate=True),
+    Input("inv-add-modal-open", "data"),
+    prevent_initial_call=True,
+)
+def reset_form_mode_on_modal_close(is_open: bool) -> tuple[str | Any, None | Any]:
+    if is_open:
+        return no_update, no_update
+    return "add", None
+
+
+@callback(
+    Output("inv-asset-type", "disabled"),
+    Output("inv-valuation-method", "disabled"),
     Output("inv-symbol", "disabled"),
     Output("inv-quantity", "disabled"),
     Output("inv-cost-basis", "disabled"),
@@ -750,13 +855,17 @@ def toggle_add_modal(
     Output("inv-cost-basis-wrap", "style"),
     Output("inv-manual-market-value-wrap", "style"),
     Output("inv-cash-balance-wrap", "style"),
+    Input("inv-account", "value"),
     Input("inv-asset-type", "value"),
     Input("inv-valuation-method", "value"),
 )
 def toggle_holding_form_fields(
+    account_id: int | None,
     asset_type: str | None,
     valuation_method: str | None,
 ) -> tuple[
+    bool,
+    bool,
     bool,
     bool,
     bool,
@@ -770,14 +879,61 @@ def toggle_holding_form_fields(
 ]:
     show = {"display": "block", "marginBottom": "8px"}
     hide = {"display": "none", "marginBottom": "8px"}
-    is_cash = asset_type == "cash"
-    is_manual = valuation_method == "manual"
+    account_type_by_id = {
+        int(row["id"]): str(row.get("account_type", ""))
+        for row in list_investment_accounts()
+    }
+    is_savings_selected = account_id is not None and (
+        account_type_by_id.get(int(account_id)) == "savings_account"
+    )
+    is_cash = asset_type == "cash" or is_savings_selected
+    is_manual = valuation_method == "manual" or is_savings_selected
+    lock_asset_controls = is_savings_selected
 
     if is_cash:
-        return True, True, True, True, False, hide, hide, hide, hide, show
+        return (
+            lock_asset_controls,
+            lock_asset_controls,
+            True,
+            True,
+            True,
+            True,
+            False,
+            hide,
+            hide,
+            hide,
+            hide,
+            show,
+        )
     if is_manual:
-        return True, True, False, False, True, hide, hide, show, show, hide
-    return False, False, False, True, True, show, show, show, hide, hide
+        return (
+            lock_asset_controls,
+            lock_asset_controls,
+            True,
+            True,
+            False,
+            False,
+            True,
+            hide,
+            hide,
+            show,
+            show,
+            hide,
+        )
+    return (
+        lock_asset_controls,
+        lock_asset_controls,
+        False,
+        False,
+        False,
+        True,
+        True,
+        show,
+        show,
+        show,
+        hide,
+        hide,
+    )
 
 
 @callback(
@@ -805,6 +961,8 @@ def toggle_holding_form_fields(
     State("inv-cost-basis", "value"),
     State("inv-manual-market-value", "value"),
     State("inv-cash-balance", "value"),
+    State("inv-form-mode", "data"),
+    State("inv-edit-holding-id", "data"),
     State("inv-refresh-token", "data"),
     prevent_initial_call=True,
 )
@@ -819,6 +977,8 @@ def add_holding(
     cost_basis_total: str | int | float | None,
     manual_market_value: str | int | float | None,
     cash_balance: str | int | float | None,
+    form_mode: str | None,
+    edit_holding_id: int | None,
     refresh_token: int,
 ) -> tuple[Any, ...]:
     if not n_clicks:
@@ -839,8 +999,69 @@ def add_holding(
             no_update,
         )
 
-    account_ids = {int(a["id"]) for a in list_investment_accounts()}
-    if account_id is None or int(account_id) not in account_ids:
+    account_map = {int(a["id"]): a for a in list_investment_accounts()}
+    account_ids = set(account_map.keys())
+    is_edit = form_mode == "edit"
+
+    target_account_id: int | None = None
+    if is_edit:
+        if edit_holding_id is None:
+            return (
+                "Select a holding to edit.",
+                refresh_token,
+                no_update,
+                "",
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+            )
+        existing = get_investment_holding_by_id(int(edit_holding_id))
+        if existing is None:
+            return (
+                "Selected holding no longer exists.",
+                refresh_token,
+                no_update,
+                "",
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+            )
+        target_account_id = int(existing["account_id"])
+    else:
+        if account_id is None or int(account_id) not in account_ids:
+            return (
+                "Choose a valid investment account.",
+                refresh_token,
+                no_update,
+                "",
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+            )
+        target_account_id = int(account_id)
+
+    if target_account_id is None:
         return (
             "Choose a valid investment account.",
             refresh_token,
@@ -857,7 +1078,19 @@ def add_holding(
             no_update,
             no_update,
         )
-    if asset_type not in ASSET_TYPES:
+
+    resolved_account_id = int(target_account_id)
+
+    selected_account = account_map.get(resolved_account_id, {})
+    selected_account_type = str(selected_account.get("account_type") or "")
+
+    effective_asset_type = asset_type
+    effective_valuation_method = valuation_method
+    if selected_account_type == "savings_account":
+        effective_asset_type = "cash"
+        effective_valuation_method = "manual"
+
+    if effective_asset_type not in ASSET_TYPES:
         return (
             "Choose a valid asset type.",
             refresh_token,
@@ -874,7 +1107,7 @@ def add_holding(
             no_update,
             no_update,
         )
-    if valuation_method not in VALUATION_METHODS:
+    if effective_valuation_method not in VALUATION_METHODS:
         return (
             "Choose a valid valuation method.",
             refresh_token,
@@ -917,7 +1150,8 @@ def add_holding(
         return value is None or str(value).strip() == ""
 
     try:
-        if asset_type == "cash":
+        target_holding_id: int | None = None
+        if effective_asset_type == "cash":
             if _missing(cash_balance):
                 return (
                     "Cash balance is required for cash holdings.",
@@ -936,9 +1170,53 @@ def add_holding(
                     no_update,
                 )
             cash_cents = _parse_dollars_to_cents(cash_balance)
-            create_investment_holding(
-                account_id=int(account_id),
-                asset_type=asset_type,
+            if is_edit and edit_holding_id is not None:
+                updated = update_investment_holding(
+                    holding_id=int(edit_holding_id),
+                    asset_type=effective_asset_type,
+                    valuation_method="manual",
+                    symbol=None,
+                    name=normalized_name,
+                    quantity=None,
+                    cost_basis_total_cents=None,
+                    manual_market_value_cents=None,
+                    cash_balance_cents=cash_cents,
+                )
+                if updated <= 0:
+                    return (
+                        "Could not update holding.",
+                        refresh_token,
+                        no_update,
+                        "",
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                    )
+                target_holding_id = int(edit_holding_id)
+            else:
+                target_holding_id = create_investment_holding(
+                    account_id=resolved_account_id,
+                    asset_type=effective_asset_type,
+                    valuation_method="manual",
+                    symbol=None,
+                    name=normalized_name,
+                    quantity=None,
+                    cost_basis_total_cents=None,
+                    manual_market_value_cents=None,
+                    cash_balance_cents=cash_cents,
+                )
+            create_investment_holding_snapshot(
+                holding_id=target_holding_id,
+                account_id=resolved_account_id,
+                event_type="manual_update" if is_edit else "add",
+                asset_type=effective_asset_type,
                 valuation_method="manual",
                 symbol=None,
                 name=normalized_name,
@@ -946,8 +1224,9 @@ def add_holding(
                 cost_basis_total_cents=None,
                 manual_market_value_cents=None,
                 cash_balance_cents=cash_cents,
+                market_value_cents=cash_cents,
             )
-        elif valuation_method == "manual":
+        elif effective_valuation_method == "manual":
             if _missing(cost_basis_total):
                 return (
                     "Cost basis total is required for manual holdings.",
@@ -984,9 +1263,53 @@ def add_holding(
                 )
             cost_basis_cents = _parse_dollars_to_cents(cost_basis_total)
             manual_market_value_cents = _parse_dollars_to_cents(manual_market_value)
-            create_investment_holding(
-                account_id=int(account_id),
-                asset_type=asset_type,
+            if is_edit and edit_holding_id is not None:
+                updated = update_investment_holding(
+                    holding_id=int(edit_holding_id),
+                    asset_type=effective_asset_type,
+                    valuation_method="manual",
+                    symbol=None,
+                    name=normalized_name,
+                    quantity=None,
+                    cost_basis_total_cents=cost_basis_cents,
+                    manual_market_value_cents=manual_market_value_cents,
+                    cash_balance_cents=None,
+                )
+                if updated <= 0:
+                    return (
+                        "Could not update holding.",
+                        refresh_token,
+                        no_update,
+                        "",
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                    )
+                target_holding_id = int(edit_holding_id)
+            else:
+                target_holding_id = create_investment_holding(
+                    account_id=resolved_account_id,
+                    asset_type=effective_asset_type,
+                    valuation_method="manual",
+                    symbol=None,
+                    name=normalized_name,
+                    quantity=None,
+                    cost_basis_total_cents=cost_basis_cents,
+                    manual_market_value_cents=manual_market_value_cents,
+                    cash_balance_cents=None,
+                )
+            create_investment_holding_snapshot(
+                holding_id=target_holding_id,
+                account_id=resolved_account_id,
+                event_type="manual_update" if is_edit else "add",
+                asset_type=effective_asset_type,
                 valuation_method="manual",
                 symbol=None,
                 name=normalized_name,
@@ -994,6 +1317,7 @@ def add_holding(
                 cost_basis_total_cents=cost_basis_cents,
                 manual_market_value_cents=manual_market_value_cents,
                 cash_balance_cents=None,
+                market_value_cents=manual_market_value_cents,
             )
         else:
             if not normalized_symbol:
@@ -1013,7 +1337,7 @@ def add_holding(
                     no_update,
                     no_update,
                 )
-            if asset_type == "crypto" and "-" not in normalized_symbol:
+            if effective_asset_type == "crypto" and "-" not in normalized_symbol:
                 return (
                     "For crypto use Yahoo symbols like BTC-USD.",
                     refresh_token,
@@ -1065,9 +1389,53 @@ def add_holding(
                     no_update,
                 )
             cost_basis_cents = _parse_dollars_to_cents(cost_basis_total)
-            create_investment_holding(
-                account_id=int(account_id),
-                asset_type=asset_type,
+            if is_edit and edit_holding_id is not None:
+                updated = update_investment_holding(
+                    holding_id=int(edit_holding_id),
+                    asset_type=effective_asset_type,
+                    valuation_method="market",
+                    symbol=normalized_symbol,
+                    name=normalized_name,
+                    quantity=float(quantity),
+                    cost_basis_total_cents=cost_basis_cents,
+                    manual_market_value_cents=None,
+                    cash_balance_cents=None,
+                )
+                if updated <= 0:
+                    return (
+                        "Could not update holding.",
+                        refresh_token,
+                        no_update,
+                        "",
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                    )
+                target_holding_id = int(edit_holding_id)
+            else:
+                target_holding_id = create_investment_holding(
+                    account_id=resolved_account_id,
+                    asset_type=effective_asset_type,
+                    valuation_method="market",
+                    symbol=normalized_symbol,
+                    name=normalized_name,
+                    quantity=float(quantity),
+                    cost_basis_total_cents=cost_basis_cents,
+                    manual_market_value_cents=None,
+                    cash_balance_cents=None,
+                )
+            create_investment_holding_snapshot(
+                holding_id=target_holding_id,
+                account_id=resolved_account_id,
+                event_type="manual_update" if is_edit else "add",
+                asset_type=effective_asset_type,
                 valuation_method="market",
                 symbol=normalized_symbol,
                 name=normalized_name,
@@ -1075,6 +1443,7 @@ def add_holding(
                 cost_basis_total_cents=cost_basis_cents,
                 manual_market_value_cents=None,
                 cash_balance_cents=None,
+                market_value_cents=None,
             )
     except ValueError as exc:
         return (
@@ -1112,7 +1481,7 @@ def add_holding(
         )
 
     return (
-        "Holding added.",
+        "Holding updated." if is_edit else "Holding added.",
         refresh_token + 1,
         None,
         "",
@@ -1133,50 +1502,128 @@ def add_holding(
     Output("inv-delete-confirm", "message"),
     Output("inv-delete-confirm", "displayed"),
     Output("inv-pending-delete", "data"),
-    Output("inv-holdings-table", "active_cell"),
-    Input("inv-holdings-table", "active_cell"),
-    State("inv-holdings-table", "data"),
+    Output("inv-add-modal-open", "data", allow_duplicate=True),
+    Output("inv-add-modal-overlay", "style", allow_duplicate=True),
+    Output("inv-form-mode", "data", allow_duplicate=True),
+    Output("inv-edit-holding-id", "data", allow_duplicate=True),
+    Output("inv-account", "value", allow_duplicate=True),
+    Output("inv-asset-type", "value", allow_duplicate=True),
+    Output("inv-valuation-method", "value", allow_duplicate=True),
+    Output("inv-symbol", "value", allow_duplicate=True),
+    Output("inv-name", "value", allow_duplicate=True),
+    Output("inv-quantity", "value", allow_duplicate=True),
+    Output("inv-cost-basis", "value", allow_duplicate=True),
+    Output("inv-manual-market-value", "value", allow_duplicate=True),
+    Output("inv-cash-balance", "value", allow_duplicate=True),
+    Output("inv-form-message", "children", allow_duplicate=True),
+    Output("inv-remove-message", "children", allow_duplicate=True),
+    Output("inv-action-location", "hash", allow_duplicate=True),
+    Input("inv-action-location", "hash"),
     prevent_initial_call=True,
 )
-def prompt_delete_holding_from_action(
-    active_cell: dict[str, Any] | None,
-    table_data: list[dict[str, Any]] | None,
-) -> tuple[str | Any, bool | Any, dict[str, Any] | None | Any, None]:
-    rows = table_data or []
-    if not active_cell or active_cell.get("column_id") != "action":
-        return no_update, no_update, no_update, None
-
-    raw_row_index = active_cell.get("row", -1)
-    try:
-        row_index = int(raw_row_index)
-    except TypeError, ValueError:
-        return no_update, no_update, no_update, None
-
-    if row_index < 0 or row_index >= len(rows):
-        return no_update, no_update, no_update, None
-
-    selected_row = rows[row_index]
-    raw_id = selected_row.get("id")
-    if raw_id is None:
-        return no_update, no_update, no_update, None
-
-    try:
-        holding_id = int(raw_id)
-    except TypeError, ValueError:
-        return no_update, no_update, no_update, None
-
-    holding_name = str(selected_row.get("name") or "this holding")
-    symbol = str(selected_row.get("symbol") or "").strip()
-    descriptor = (
-        f"{holding_name} ({symbol})" if symbol and symbol != "-" else holding_name
+def handle_holding_action_from_hash(action_hash: str | None) -> tuple[Any, ...]:
+    noop = (
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        no_update,
+        "",
     )
+    if not action_hash:
+        return noop
 
-    return (
-        f"Delete {descriptor}?",
-        True,
-        {"holding_id": holding_id},
-        None,
-    )
+    raw = action_hash.lstrip("#")
+    if raw.startswith("inv-delete-"):
+        raw_id = raw.removeprefix("inv-delete-")
+        try:
+            holding_id = int(raw_id)
+        except TypeError, ValueError:
+            return noop
+
+        holding = get_investment_holding_by_id(holding_id)
+        if holding is None:
+            return noop
+
+        name = str(holding.get("name") or "this holding")
+        symbol = str(holding.get("symbol") or "").strip()
+        descriptor = f"{name} ({symbol})" if symbol else name
+        return (
+            f"Delete {descriptor}?",
+            True,
+            {"holding_id": holding_id},
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            "",
+        )
+
+    if raw.startswith("inv-edit-"):
+        raw_id = raw.removeprefix("inv-edit-")
+        try:
+            holding_id = int(raw_id)
+        except TypeError, ValueError:
+            return noop
+
+        holding = get_investment_holding_by_id(holding_id)
+        if holding is None:
+            return noop
+
+        cost_basis_cents = holding.get("cost_basis_total_cents")
+        manual_cents = holding.get("manual_market_value_cents")
+        cash_cents = holding.get("cash_balance_cents")
+        quantity = holding.get("quantity")
+
+        return (
+            no_update,
+            False,
+            None,
+            True,
+            _modal_overlay_style(True),
+            "edit",
+            holding_id,
+            int(holding["account_id"]),
+            str(holding.get("asset_type") or "stock_etf"),
+            str(holding.get("valuation_method") or "market"),
+            str(holding.get("symbol") or ""),
+            str(holding.get("name") or ""),
+            float(quantity) if quantity is not None else None,
+            float(int(cost_basis_cents) / 100)
+            if cost_basis_cents is not None
+            else None,
+            float(int(manual_cents) / 100) if manual_cents is not None else None,
+            float(int(cash_cents) / 100) if cash_cents is not None else None,
+            "",
+            "",
+            "",
+        )
+
+    return noop
 
 
 @callback(
@@ -1214,6 +1661,49 @@ def delete_holding_after_confirmation(
     except TypeError, ValueError:
         return "Could not delete holding.", no_update, False, None, no_update
 
+    holding = get_investment_holding_by_id(holding_id)
+    if holding is not None:
+        asset_type = str(holding.get("asset_type") or "")
+        valuation_method = str(holding.get("valuation_method") or "")
+        if asset_type == "cash":
+            market_value_cents = int(holding.get("cash_balance_cents") or 0)
+        elif valuation_method == "manual":
+            market_value_cents = int(holding.get("manual_market_value_cents") or 0)
+        else:
+            market_value_cents = None
+
+        create_investment_holding_snapshot(
+            holding_id=holding_id,
+            account_id=int(holding["account_id"]),
+            event_type="delete",
+            asset_type=asset_type,
+            valuation_method=valuation_method,
+            symbol=(str(holding.get("symbol")) if holding.get("symbol") else None),
+            name=str(holding.get("name") or ""),
+            quantity=(
+                float(holding["quantity"])
+                if holding.get("quantity") is not None
+                else None
+            ),
+            cost_basis_total_cents=(
+                int(holding["cost_basis_total_cents"])
+                if holding.get("cost_basis_total_cents") is not None
+                else None
+            ),
+            manual_market_value_cents=(
+                int(holding["manual_market_value_cents"])
+                if holding.get("manual_market_value_cents") is not None
+                else None
+            ),
+            cash_balance_cents=(
+                int(holding["cash_balance_cents"])
+                if holding.get("cash_balance_cents") is not None
+                else None
+            ),
+            market_value_cents=market_value_cents,
+            currency=str(holding.get("currency") or "USD"),
+        )
+
     removed = delete_investment_holdings([holding_id])
     return f"Removed {removed} holding(s).", refresh_token + 1, False, None, None
 
@@ -1238,6 +1728,7 @@ def refresh_prices(
 @callback(
     Output("inv-account", "options"),
     Output("inv-account", "value"),
+    Output("inv-total-market-value", "children"),
     Output("inv-holdings-table", "data"),
     Output("inv-account-overview", "data"),
     Output("inv-chart-account", "options"),
@@ -1252,6 +1743,7 @@ def refresh_dashboard_data(
 ) -> tuple[
     list[dict[str, str | int]],
     int | None,
+    str,
     list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, str | int]],
@@ -1267,15 +1759,18 @@ def refresh_dashboard_data(
         cached_accounts = cache_dict.get("account_rows")
         cached_figure = cache_dict.get("figure")
         cached_allocation = cache_dict.get("allocation_rows")
+        cached_total_market_value_cents = cache_dict.get("total_market_value_cents")
         if (
             isinstance(cached_holdings, list)
             and isinstance(cached_accounts, list)
             and cached_figure is not None
             and isinstance(cached_allocation, list)
         ):
+            total_market_value_cents = int(cached_total_market_value_cents or 0)
             return (
                 account_options,
                 default_account,
+                _format_money(total_market_value_cents / 100),
                 cached_holdings,
                 cached_accounts,
                 account_options,
@@ -1283,16 +1778,24 @@ def refresh_dashboard_data(
                 no_update,
             )
 
-    holdings_rows, account_rows, figure, allocation_rows = _build_dashboard_data()
+    (
+        holdings_rows,
+        account_rows,
+        figure,
+        allocation_rows,
+        total_market_value_cents,
+    ) = _build_dashboard_data()
     cache_payload = _build_cache_payload(
         holdings_rows,
         account_rows,
         figure,
         allocation_rows,
+        total_market_value_cents,
     )
     return (
         account_options,
         default_account,
+        _format_money(total_market_value_cents / 100),
         holdings_rows,
         account_rows,
         account_options,

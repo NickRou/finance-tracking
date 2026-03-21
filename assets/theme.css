@@ -200,9 +200,25 @@ input,
   height: 100%;
 }
 
+.dash-table-container .dash-spreadsheet-inner th[data-dash-column="action"],
+.dash-table-container .dash-spreadsheet-inner td[data-dash-column="action"] {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
 .dash-table-container .dash-spreadsheet-inner td[data-dash-column="action"] p {
   margin: 0;
   line-height: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.dash-table-container .dash-spreadsheet-inner td[data-dash-column="action"] a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .dash-table-container .dash-spreadsheet-inner td[data-dash-column="action"] img {
@@ -215,11 +231,41 @@ input,
   filter: brightness(0) saturate(0%) opacity(0.7);
 }
 
-.dash-table-container .dash-spreadsheet-inner td[data-dash-column="action"]:hover img,
-.dash-table-container .dash-spreadsheet-inner td[data-dash-column="action"] img:hover {
+.dash-table-container .dash-spreadsheet-inner td[data-dash-column="action"] a[href^="#inv-edit-"]:hover img {
+  opacity: 1;
+  transform: scale(1.08);
+  filter: brightness(0) saturate(100%) invert(26%) sepia(16%) saturate(1261%) hue-rotate(186deg) brightness(95%) contrast(88%);
+}
+
+.dash-table-container .dash-spreadsheet-inner td[data-dash-column="action"] a[href^="#inv-delete-"]:hover img {
   opacity: 1;
   transform: scale(1.08);
   filter: brightness(0) saturate(100%) invert(22%) sepia(87%) saturate(4508%) hue-rotate(347deg) brightness(96%) contrast(92%);
+}
+
+#inv-holdings-table .dash-spreadsheet-inner th[data-dash-column="action"],
+#inv-holdings-table .dash-spreadsheet-inner td[data-dash-column="action"] {
+  text-align: center !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+#inv-holdings-table .dash-spreadsheet-inner td[data-dash-column="action"] .dash-cell-value {
+  width: 100% !important;
+  height: 100% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 !important;
+}
+
+#inv-holdings-table .dash-spreadsheet-inner td[data-dash-column="action"] p {
+  width: 100% !important;
+  margin: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px;
 }
 
 .dash-table-container .dash-spreadsheet-inner th.dash-select-header,

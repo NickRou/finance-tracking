@@ -88,9 +88,7 @@ def _fetch_overview() -> tuple[dict[str, str], list[dict[str, str]]]:
                 a.institution,
                 a.account_type,
                 COUNT(t.id) AS transaction_count,
-                COALESCE(SUM(t.amount_cents), 0) AS net_cents,
-                COALESCE(SUM(CASE WHEN t.amount_cents < 0 THEN -t.amount_cents ELSE 0 END), 0) AS debit_cents,
-                COALESCE(SUM(CASE WHEN t.amount_cents > 0 THEN t.amount_cents ELSE 0 END), 0) AS credit_cents,
+                MIN(t.occurred_on) AS earliest_transaction_date,
                 MAX(t.occurred_on) AS latest_transaction_date,
                 s.anchor_date,
                 s.anchor_balance_cents,
@@ -117,18 +115,12 @@ def _fetch_overview() -> tuple[dict[str, str], list[dict[str, str]]]:
             "institution": format_institution(str(row[2])),
             "account_type": format_account_type(str(row[3])),
             "transaction_count": int(row[4]),
-            "net": _format_money(int(row[5])),
-            "debits": _format_money(int(row[6])),
-            "credits": _format_money(int(row[7])),
-            "latest_transaction_date": str(row[8] or "-"),
-            "anchor_date": str(row[9] or "-"),
-            "anchor_balance": _format_money(int(row[10]))
-            if row[10] is not None
-            else "-",
+            "earliest_transaction_date": str(row[5] or "-"),
+            "latest_transaction_date": str(row[6] or "-"),
+            "anchor_date": str(row[7] or "-"),
+            "anchor_balance": _format_money(int(row[8])) if row[8] is not None else "-",
             "estimated_current_balance": (
-                _format_money(int(row[10]) - int(row[11]))
-                if row[10] is not None
-                else "-"
+                _format_money(int(row[8]) - int(row[9])) if row[8] is not None else "-"
             ),
         }
         for row in rows
@@ -418,9 +410,7 @@ def layout() -> html.Div:
                     {"name": "Institution", "id": "institution"},
                     {"name": "Type", "id": "account_type"},
                     {"name": "Transactions", "id": "transaction_count"},
-                    {"name": "Net", "id": "net"},
-                    {"name": "Debits", "id": "debits"},
-                    {"name": "Credits", "id": "credits"},
+                    {"name": "Earliest", "id": "earliest_transaction_date"},
                     {"name": "Latest", "id": "latest_transaction_date"},
                     {"name": "Anchor Date", "id": "anchor_date"},
                     {"name": "Anchor Balance", "id": "anchor_balance"},

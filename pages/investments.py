@@ -37,10 +37,19 @@ register_page(__name__, path="/investments", title="Investments")
 ASSET_TYPES = ["cash", "stock_etf", "crypto"]
 VALUATION_METHODS = ["market", "manual"]
 CACHE_TTL_SECONDS = 15 * 60
+CACHE_VERSION = 3
+DONUT_DOMAIN_X = [0.08, 0.78]
 
 
 def _cache_is_fresh(cache_data: dict[str, Any] | None) -> bool:
     if not cache_data:
+        return False
+    version = cache_data.get("version")
+    try:
+        parsed_version = int(version or 0)
+    except TypeError, ValueError:
+        return False
+    if parsed_version != CACHE_VERSION:
         return False
     fetched_at = cache_data.get("fetched_at")
     if not isinstance(fetched_at, (int, float)):
@@ -52,12 +61,15 @@ def _build_cache_payload(
     holdings_rows: list[dict[str, Any]],
     account_rows: list[dict[str, Any]],
     figure: go.Figure,
+    allocation_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
+        "version": CACHE_VERSION,
         "fetched_at": time.time(),
         "holdings_rows": holdings_rows,
         "account_rows": account_rows,
         "figure": figure.to_plotly_json(),
+        "allocation_rows": allocation_rows,
     }
 
 
@@ -150,6 +162,9 @@ def _build_account_distribution_chart(
                 hole=0.45,
                 sort=False,
                 textinfo="label+percent",
+                showlegend=True,
+                domain={"x": DONUT_DOMAIN_X, "y": [0.0, 1.0]},
+                hovertemplate="%{label}<br>%{value:$,.2f} (%{percent})<extra></extra>",
             )
         )
     else:
@@ -166,12 +181,90 @@ def _build_account_distribution_chart(
         title="Investment Allocation by Account",
         margin={"l": 30, "r": 20, "t": 50, "b": 30},
         height=360,
+        legend={
+            "orientation": "v",
+            "x": 1.02,
+            "xanchor": "left",
+            "y": 1.0,
+            "yanchor": "top",
+        },
+    )
+    return fig
+
+
+def _build_account_holdings_chart(
+    allocation_rows: list[dict[str, Any]],
+    account_id: int | None,
+) -> go.Figure:
+    fig = go.Figure()
+    if account_id is None:
+        fig.add_annotation(
+            text="Select an investment account to view allocation.",
+            showarrow=False,
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+        )
+        fig.update_layout(
+            title="Investment Allocation within Account",
+            margin={"l": 30, "r": 20, "t": 50, "b": 30},
+            height=360,
+        )
+        return fig
+
+    rows = [
+        row
+        for row in allocation_rows
+        if int(row.get("account_id", -1)) == int(account_id)
+        and float(row.get("market_value", 0.0)) > 0
+    ]
+    labels = [str(row.get("holding_label") or "Unknown") for row in rows]
+    values = [float(row.get("market_value") or 0.0) for row in rows]
+
+    if values:
+        fig.add_trace(
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.45,
+                sort=False,
+                textinfo="label+percent",
+                showlegend=True,
+                domain={"x": DONUT_DOMAIN_X, "y": [0.0, 1.0]},
+                hovertemplate="%{label}<br>%{value:$,.2f} (%{percent})<extra></extra>",
+            )
+        )
+    else:
+        fig.add_annotation(
+            text="No positive market value holdings for this account.",
+            showarrow=False,
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+        )
+
+    fig.update_layout(
+        title="Investment Allocation within Account",
+        margin={"l": 30, "r": 20, "t": 50, "b": 30},
+        height=360,
+        legend={
+            "orientation": "v",
+            "x": 1.02,
+            "xanchor": "left",
+            "y": 1.0,
+            "yanchor": "top",
+        },
     )
     return fig
 
 
 def _build_dashboard_data() -> tuple[
-    list[dict[str, Any]], list[dict[str, Any]], go.Figure
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    go.Figure,
+    list[dict[str, Any]],
 ]:
     holdings = list_investment_holdings()
 
@@ -189,6 +282,7 @@ def _build_dashboard_data() -> tuple[
     price_map, error_map = _fetch_symbol_prices(symbols)
 
     table_rows: list[dict[str, Any]] = []
+    allocation_rows: list[dict[str, Any]] = []
     by_account: dict[int, dict[str, Any]] = {}
 
     for row in holdings:
@@ -198,7 +292,7 @@ def _build_dashboard_data() -> tuple[
         institution = str(row["institution"])
         asset_type = str(row["asset_type"])
         valuation_method = str(row.get("valuation_method") or "market")
-        symbol = str(row["symbol"] or "")
+        symbol = str(row["symbol"] or "").strip().upper()
         name = str(row["name"])
 
         latest_price: float | None = None
@@ -267,6 +361,22 @@ def _build_dashboard_data() -> tuple[
             }
         )
 
+        if asset_type == "cash":
+            holding_label = "Cash"
+        elif valuation_method == "market" and symbol:
+            holding_label = symbol
+        else:
+            holding_label = name
+
+        allocation_rows.append(
+            {
+                "account_id": account_id,
+                "account_name": account_name,
+                "holding_label": holding_label,
+                "market_value": market_value,
+            }
+        )
+
     account_rows: list[dict[str, Any]] = []
     for row in by_account.values():
         cash_pct = (
@@ -287,7 +397,7 @@ def _build_dashboard_data() -> tuple[
         )
 
     figure = _build_account_distribution_chart(by_account)
-    return table_rows, account_rows, figure
+    return table_rows, account_rows, figure, allocation_rows
 
 
 def _modal_overlay_style(is_open: bool) -> dict[str, str]:
@@ -559,6 +669,40 @@ def layout() -> html.Div:
                         data=[],
                         style_table={"overflowX": "auto", "marginBottom": "16px"},
                         style_cell={"textAlign": "left", "padding": "8px"},
+                    ),
+                    dcc.Tabs(
+                        id="inv-chart-view",
+                        value="by_account",
+                        parent_className="inv-chart-tabs",
+                        className="inv-chart-tabs-inner",
+                        children=[
+                            dcc.Tab(
+                                label="Allocation by Account",
+                                value="by_account",
+                                className="inv-chart-tab",
+                                selected_className="inv-chart-tab-selected",
+                            ),
+                            dcc.Tab(
+                                label="Allocation within Account",
+                                value="within_account",
+                                className="inv-chart-tab",
+                                selected_className="inv-chart-tab-selected",
+                            ),
+                        ],
+                    ),
+                    html.Div(
+                        id="inv-chart-account-wrap",
+                        children=[
+                            dcc.Dropdown(
+                                id="inv-chart-account",
+                                options=[],
+                                value=None,
+                                placeholder="Select account",
+                                clearable=False,
+                                style={"maxWidth": "460px", "marginTop": "10px"},
+                            )
+                        ],
+                        style={"display": "none"},
                     ),
                     dcc.Graph(id="inv-portfolio-chart", figure=go.Figure()),
                 ],
@@ -1096,7 +1240,8 @@ def refresh_prices(
     Output("inv-account", "value"),
     Output("inv-holdings-table", "data"),
     Output("inv-account-overview", "data"),
-    Output("inv-portfolio-chart", "figure"),
+    Output("inv-chart-account", "options"),
+    Output("inv-chart-account", "value"),
     Output("inv-dashboard-cache", "data"),
     Input("inv-refresh-token", "data"),
     State("inv-dashboard-cache", "data"),
@@ -1109,7 +1254,8 @@ def refresh_dashboard_data(
     int | None,
     list[dict[str, Any]],
     list[dict[str, Any]],
-    go.Figure,
+    list[dict[str, str | int]],
+    int | None,
     dict[str, Any] | Any,
 ]:
     account_options = _investment_account_options()
@@ -1120,27 +1266,72 @@ def refresh_dashboard_data(
         cached_holdings = cache_dict.get("holdings_rows")
         cached_accounts = cache_dict.get("account_rows")
         cached_figure = cache_dict.get("figure")
+        cached_allocation = cache_dict.get("allocation_rows")
         if (
             isinstance(cached_holdings, list)
             and isinstance(cached_accounts, list)
             and cached_figure is not None
+            and isinstance(cached_allocation, list)
         ):
             return (
                 account_options,
                 default_account,
                 cached_holdings,
                 cached_accounts,
-                cast(Any, cached_figure),
+                account_options,
+                default_account,
                 no_update,
             )
 
-    holdings_rows, account_rows, figure = _build_dashboard_data()
-    cache_payload = _build_cache_payload(holdings_rows, account_rows, figure)
+    holdings_rows, account_rows, figure, allocation_rows = _build_dashboard_data()
+    cache_payload = _build_cache_payload(
+        holdings_rows,
+        account_rows,
+        figure,
+        allocation_rows,
+    )
     return (
         account_options,
         default_account,
         holdings_rows,
         account_rows,
-        figure,
+        account_options,
+        default_account,
         cache_payload,
     )
+
+
+@callback(
+    Output("inv-chart-account-wrap", "style"),
+    Input("inv-chart-view", "value"),
+)
+def toggle_chart_account_selector(view: str | None) -> dict[str, str]:
+    if view == "within_account":
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+@callback(
+    Output("inv-portfolio-chart", "figure"),
+    Input("inv-chart-view", "value"),
+    Input("inv-chart-account", "value"),
+    Input("inv-dashboard-cache", "data"),
+)
+def update_allocation_chart(
+    view: str | None,
+    chart_account_id: int | None,
+    cache_data: dict[str, Any] | None,
+) -> go.Figure:
+    cache_dict = cast(dict[str, Any], cache_data or {})
+
+    if view == "within_account":
+        allocation_rows_raw = cache_dict.get("allocation_rows")
+        allocation_rows = (
+            allocation_rows_raw if isinstance(allocation_rows_raw, list) else []
+        )
+        return _build_account_holdings_chart(allocation_rows, chart_account_id)
+
+    figure_json = cache_dict.get("figure")
+    if figure_json is not None:
+        return go.Figure(cast(Any, figure_json))
+    return go.Figure()

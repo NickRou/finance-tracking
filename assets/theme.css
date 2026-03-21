@@ -245,6 +245,38 @@ input,
   padding: 8px;
 }
 
+.inv-chart-tabs {
+  margin: 4px 0 8px;
+}
+
+.inv-chart-tabs-inner {
+  display: inline-flex;
+  gap: 6px;
+  border: none !important;
+}
+
+.inv-chart-tab {
+  border: 1px solid var(--border) !important;
+  border-radius: 999px !important;
+  background: var(--surface-alt) !important;
+  color: var(--text-muted) !important;
+  font-size: 0.82rem !important;
+  font-weight: 700 !important;
+  padding: 6px 10px !important;
+  transition: all 140ms ease;
+}
+
+.inv-chart-tab:hover {
+  color: var(--text) !important;
+  border-color: #d8d3c9 !important;
+}
+
+.inv-chart-tab-selected {
+  border-color: var(--accent) !important;
+  background: rgba(76, 91, 115, 0.12) !important;
+  color: var(--accent-strong) !important;
+}
+
 .tx-import-modal-overlay {
   position: fixed;
   inset: 0;
